@@ -37,7 +37,7 @@ class JobManager:
     def _close_db(self, db: Session):
         """Close database session if we own it"""
         if self._owns_session and db:
-            self._close_db(db)
+            db.close()
     
     def create_job(self, youtube_url: str, language: str, model: str) -> Job:
         """

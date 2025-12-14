@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:14
@@ -65,7 +63,8 @@ services:
     volumes:
       - ./backend:/app
       - ./audio_files:/app/audio_files
-    command: celery -A worker worker --loglevel=info
+    # Listen to the dedicated queues defined in celery_config.task_routes
+    command: celery -A worker worker --loglevel=info -Q transcription,correction
 
 volumes:
   postgres_data:

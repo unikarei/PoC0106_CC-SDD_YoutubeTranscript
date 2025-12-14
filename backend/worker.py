@@ -9,10 +9,10 @@ from dotenv import load_dotenv
 
 from database import SessionLocal
 from models import Job
-from backend.services.audio_extractor import AudioExtractor
-from backend.services.transcription_service import TranscriptionService
-from backend.services.correction_service import CorrectionService
-from backend.services.job_manager import JobManager
+from services.audio_extractor import AudioExtractor
+from services.transcription_service import TranscriptionService
+from services.correction_service import CorrectionService
+from services.job_manager import JobManager
 
 load_dotenv()
 
@@ -86,7 +86,7 @@ def transcription_task(self, job_id: str):
             file_path=extraction_result.audio_path,
             duration_seconds=extraction_result.duration_seconds,
             title=extraction_result.title,
-            file_format=extraction_result.format,
+            file_format=extraction_result.format or "m4a",
             file_size_bytes=extraction_result.file_size_bytes
         )
         

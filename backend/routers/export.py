@@ -9,8 +9,9 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from database import get_db
-from backend.services.job_manager import JobManager
-from backend.services.export_service import ExportService
+from services.job_manager import JobManager
+from services.export_service import ExportService
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ router = APIRouter()
 async def export_transcript(
     job_id: str,
     format: Annotated[str, Query(description="Export format: txt, srt, or vtt")] = "txt",
-    db: Annotated[Session, Depends(get_db)] = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
     Export transcript in specified format
@@ -92,11 +93,18 @@ async def export_transcript(
             media_type = "text/vtt"
             extension = "vtt"
         
-        # Generate filename
+        # Generate filename (ASCII-safe + UTF-8 variant)
         video_title = job.audio_file.title if job.audio_file and job.audio_file.title else "transcript"
-        # Clean filename (remove invalid characters)
-        video_title = "".join(c for c in video_title if c.isalnum() or c in (' ', '-', '_')).strip()
-        filename = f"{video_title}.{extension}"
+        # ASCII-safe fallback (replace non-ASCII with '_')
+        safe_title = "".join(
+            c if c.isascii() and (c.isalnum() or c in (" ", "-", "_")) else "_"
+            for c in video_title
+        ).strip()
+        if not safe_title:
+            safe_title = "transcript"
+        filename_ascii = f"{safe_title}.{extension}"
+        filename_utf8 = f"{video_title}.{extension}"
+        filename_utf8_quoted = quote(filename_utf8)
         
         logger.info(f"Exporting job {job_id} as {format}")
         
@@ -104,7 +112,7 @@ async def export_transcript(
             content=content.encode('utf-8'),
             media_type=media_type,
             headers={
-                "Content-Disposition": f"attachment; filename=\"{filename}\""
+                "Content-Disposition": f"attachment; filename=\"{filename_ascii}\"; filename*=UTF-8''{filename_utf8_quoted}"
             }
         )
         

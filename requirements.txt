@@ -16,7 +16,7 @@ celery==5.3.6
 redis==5.0.1
 
 # YouTube Audio Extraction
-yt-dlp==2024.1.7
+yt-dlp>=2024.8.6
 
 # OpenAI APIs
 openai==1.10.0

@@ -112,6 +112,7 @@ class TranscriptionService:
                 result = {
                     'success': True,
                     'text': response.text,
+                    'model': model,
                 }
                 
                 # Add detected language if available
@@ -134,3 +135,26 @@ class TranscriptionService:
                 'success': False,
                 'error': f"Transcription failed: {str(e)}"
             }
+
+    def transcribe_audio(
+        self,
+        audio_path: str,
+        language: Optional[str] = None,
+        model: str = "whisper-1",
+        prompt: Optional[str] = None
+    ) -> TranscriptionResult:
+        """Wrapper that returns a typed TranscriptionResult"""
+        raw = self.transcribe(
+            audio_file_path=audio_path,
+            language=language,
+            model=model,
+            prompt=prompt,
+        )
+
+        return TranscriptionResult(
+            success=raw.get('success', False),
+            text=raw.get('text'),
+            language_detected=raw.get('language_detected'),
+            model=raw.get('model', model),
+            error=raw.get('error'),
+        )

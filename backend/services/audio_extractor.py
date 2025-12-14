@@ -72,10 +72,12 @@ class ProgressCallback:
 class AudioExtractionResult:
     """Result of audio extraction operation"""
     success: bool
-    file_path: Optional[str]
+    audio_path: Optional[str]
     duration_seconds: Optional[int]
     title: Optional[str]
     error: Optional[str]
+    file_size_bytes: Optional[int] = None
+    format: Optional[str] = None
 
 
 class AudioExtractor:
@@ -88,9 +90,10 @@ class AudioExtractor:
     
     # YouTube URL patterns
     YOUTUBE_PATTERNS = [
-        r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+',
-        r'(?:https?://)?(?:www\.)?youtu\.be/[\w-]+',
-        r'(?:https?://)?(?:www\.)?youtube\.com/embed/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+(?:[&?].*)?$',
+        r'(?:https?://)?(?:www\.)?youtu\.be/[\w-]+(?:[?].*)?$',
+        r'(?:https?://)?(?:www\.)?youtube\.com/embed/[\w-]+(?:[?].*)?$',
+        r'(?:https?://)?(?:www\.)?youtube\.com/shorts/[\w-]+(?:[?].*)?$',
     ]
     
     def __init__(self, output_dir: str = "audio_files"):
@@ -164,7 +167,7 @@ class AudioExtractor:
         if not self.validate_youtube_url(youtube_url):
             return AudioExtractionResult(
                 success=False,
-                file_path=None,
+                audio_path=None,
                 duration_seconds=None,
                 title=None,
                 error="Invalid YouTube URL format"
@@ -200,7 +203,7 @@ class AudioExtractor:
                 if not info:
                     return AudioExtractionResult(
                         success=False,
-                        file_path=None,
+                        audio_path=None,
                         duration_seconds=None,
                         title=None,
                         error="Could not retrieve video information"
@@ -211,7 +214,7 @@ class AudioExtractor:
                 if duration > self.MAX_DURATION_SECONDS:
                     return AudioExtractionResult(
                         success=False,
-                        file_path=None,
+                        audio_path=None,
                         duration_seconds=duration,
                         title=info.get('title'),
                         error=f"Video duration exceeds 60 minute limit ({duration}s)"
@@ -224,12 +227,19 @@ class AudioExtractor:
                 # Construct final file path
                 final_path = os.path.join(self.output_dir, f"{job_id}.m4a")
                 
+                file_size = None
+                try:
+                    file_size = os.path.getsize(final_path)
+                except OSError:
+                    file_size = None
                 return AudioExtractionResult(
                     success=True,
-                    file_path=final_path,
+                    audio_path=final_path,
                     duration_seconds=duration,
                     title=info.get('title'),
-                    error=None
+                    error=None,
+                    file_size_bytes=file_size,
+                    format="m4a"
                 )
                 
         except yt_dlp.DownloadError as e:
@@ -244,7 +254,7 @@ class AudioExtractor:
             
             return AudioExtractionResult(
                 success=False,
-                file_path=None,
+                audio_path=None,
                 duration_seconds=None,
                 title=None,
                 error=error_msg
@@ -254,7 +264,7 @@ class AudioExtractor:
             logger.error(f"Unexpected error extracting audio: {e}")
             return AudioExtractionResult(
                 success=False,
-                file_path=None,
+                audio_path=None,
                 duration_seconds=None,
                 title=None,
                 error=f"Extraction failed: {str(e)}"

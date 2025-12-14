@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from database import get_db
-from backend.models import Job
-from backend.routers.schemas import (
+from models import Job
+from routers.schemas import (
     TranscribeJobRequest,
     TranscribeJobResponse,
     JobStatusResponse,
@@ -17,8 +17,8 @@ from backend.routers.schemas import (
     CorrectTranscriptRequest,
     CorrectTranscriptResponse,
 )
-from backend.services.job_manager import JobManager
-from backend.worker import transcription_task, correction_task
+from services.job_manager import JobManager
+from worker import transcription_task, correction_task
 
 logger = logging.getLogger(__name__)
 

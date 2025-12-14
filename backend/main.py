@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
 from database import engine, Base
-from backend.routers import jobs, export, health
+from routers import jobs, export, health
 
 
 # Configure logging

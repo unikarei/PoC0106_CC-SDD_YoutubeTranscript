@@ -9,8 +9,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from database import engine
-from backend.routers.schemas import HealthResponse
-from celery_config import app as celery_app
+from routers.schemas import HealthResponse
+from worker import celery_app
 
 logger = logging.getLogger(__name__)
 
