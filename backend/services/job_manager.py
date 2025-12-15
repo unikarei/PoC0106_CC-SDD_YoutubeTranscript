@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 
 from database import SessionLocal
-from models import Job, AudioFile, Transcript, CorrectedTranscript
+from models import Job, AudioFile, Transcript, CorrectedTranscript, QaResult
 
 logger = logging.getLogger(__name__)
 
@@ -230,5 +230,52 @@ class JobManager:
             
             logger.info(f"Saved transcript for job {job_id}")
             
+        finally:
+            self._close_db(db)
+
+    def upsert_corrected_transcript(
+        self,
+        job_id: str,
+        corrected_text: str,
+        original_text: str,
+        correction_model: str,
+        changes_summary: str,
+    ) -> None:
+        """Save or replace corrected transcript"""
+        db = self._get_db()
+        try:
+            existing = db.query(CorrectedTranscript).filter(CorrectedTranscript.job_id == job_id).first()
+            if existing:
+                db.delete(existing)
+                db.commit()
+
+            corrected = CorrectedTranscript(
+                job_id=job_id,
+                corrected_text=corrected_text,
+                original_text=original_text,
+                correction_model=correction_model,
+                changes_summary=changes_summary,
+            )
+            db.add(corrected)
+            db.commit()
+            logger.info(f"Upserted corrected transcript for job {job_id}")
+        finally:
+            self._close_db(db)
+
+    def create_qa_result(self, job_id: str, question: str, answer: str, qa_model: str) -> str:
+        """Persist QA result"""
+        db = self._get_db()
+        try:
+            qa = QaResult(
+                job_id=job_id,
+                question=question,
+                answer=answer,
+                qa_model=qa_model,
+            )
+            db.add(qa)
+            db.commit()
+            db.refresh(qa)
+            logger.info(f"Saved QA result for job {job_id}")
+            return qa.id
         finally:
             self._close_db(db)

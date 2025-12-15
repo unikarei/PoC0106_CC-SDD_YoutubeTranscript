@@ -37,6 +37,7 @@ class Job(Base):
     audio_file = relationship("AudioFile", back_populates="job", uselist=False, cascade="all, delete-orphan")
     transcript = relationship("Transcript", back_populates="job", uselist=False, cascade="all, delete-orphan")
     corrected_transcript = relationship("CorrectedTranscript", back_populates="job", uselist=False, cascade="all, delete-orphan")
+    qa_results = relationship("QaResult", back_populates="job", cascade="all, delete-orphan")
 
     # Constraints
     __table_args__ = (
@@ -119,4 +120,27 @@ class CorrectedTranscript(Base):
     # Indexes
     __table_args__ = (
         Index("ix_corrected_transcripts_job_id", "job_id"),
+    )
+
+
+class QaResult(Base):
+    """
+    QaResult model represents Q&A entries associated with a job
+    """
+
+    __tablename__ = "qa_results"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    qa_model = Column(String(50), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    job = relationship("Job", back_populates="qa_results")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_qa_results_job_id", "job_id"),
     )

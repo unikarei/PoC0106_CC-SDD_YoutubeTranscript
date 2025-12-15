@@ -1,5 +1,6 @@
 from logging.config import fileConfig
 
+import os
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
@@ -18,6 +19,11 @@ from models import Job, AudioFile, Transcript, CorrectedTranscript
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Allow DATABASE_URL env var to override the URL in alembic.ini so container
+# environments stay in sync with the running app.
+if "DATABASE_URL" in os.environ:
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

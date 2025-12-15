@@ -10,6 +10,7 @@ interface TranscriptResultProps {
 interface JobResult {
   job_id: string
   status: string
+  model?: string
   audio_file?: {
     title: string
     duration_seconds: number
@@ -29,20 +30,41 @@ interface JobResult {
     changes_summary: string
     created_at: string
   }
+  qa_results?: QaResult[]
   error_message?: string
+}
+
+interface QaResult {
+  question: string
+  answer: string
+  qa_model?: string
+  created_at: string
 }
 
 export default function TranscriptResult({ jobId }: TranscriptResultProps) {
   const [result, setResult] = useState<JobResult | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [isQaSubmitting, setIsQaSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [exportFormat, setExportFormat] = useState<'txt' | 'srt' | 'vtt'>('txt')
   const [isExporting, setIsExporting] = useState(false)
-  const [isCorrecting, setIsCorrecting] = useState(false)
-  const [viewMode, setViewMode] = useState<'original' | 'corrected' | 'comparison'>('original')
+  const [activeTab, setActiveTab] = useState<'original' | 'proofread' | 'qa'>('original')
+  const [isProofreading, setIsProofreading] = useState(false)
+  const [proofreadModel, setProofreadModel] = useState('gpt-4o-mini')
+  const [qaModel, setQaModel] = useState('gpt-4o-mini')
+  const [qaQuestion, setQaQuestion] = useState('')
+  const [qaHistory, setQaHistory] = useState<QaResult[]>([])
+  const [autoProofreadQueued, setAutoProofreadQueued] = useState(false)
 
   useEffect(() => {
+    // Reset state on job change
+    setActiveTab('original')
+    setProofreadModel('gpt-4o-mini')
+    setQaModel('gpt-4o-mini')
+    setQaQuestion('')
+    setQaHistory([])
+    setAutoProofreadQueued(false)
     fetchResult()
   }, [jobId])
 
@@ -50,6 +72,15 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
     try {
       const data = await apiClient.getJobResult(jobId)
       setResult(data)
+      setQaHistory(data.qa_results || [])
+
+      // 自動Proofread: 文字起こし完了かつ校正結果なしの場合に実行
+      if (data.transcript && !data.corrected_transcript && !autoProofreadQueued) {
+        const defaultModel = data.model || 'gpt-4o-mini'
+        setProofreadModel(defaultModel)
+        setAutoProofreadQueued(true)
+        await triggerProofread(defaultModel, false)
+      }
     } catch (err: any) {
       console.error('Failed to fetch result:', err)
       setError('結果の取得に失敗しました')
@@ -88,19 +119,34 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
     }
   }
 
-  const handleCorrection = async () => {
-    setIsCorrecting(true)
+  const triggerProofread = async (model: string, showAlert = true) => {
+    setIsProofreading(true)
     try {
-      await apiClient.requestCorrection(jobId)
-      // Wait a bit then refresh result
-      setTimeout(async () => {
-        await fetchResult()
-        setIsCorrecting(false)
-      }, 2000)
+      await apiClient.requestProofread(jobId, model)
+      if (showAlert) {
+        alert('Proofreadを開始しました。少し待ってから結果を確認してください。')
+      }
+      setTimeout(fetchResult, 2000)
     } catch (err: any) {
-      console.error('Failed to request correction:', err)
-      alert('校正のリクエストに失敗しました')
-      setIsCorrecting(false)
+      console.error('Failed to request proofread:', err)
+      alert('Proofreadのリクエストに失敗しました')
+    } finally {
+      setIsProofreading(false)
+    }
+  }
+
+  const triggerQa = async () => {
+    if (!qaQuestion.trim()) return
+    setIsQaSubmitting(true)
+    try {
+      await apiClient.askQuestion(jobId, qaQuestion.trim(), qaModel)
+      setQaQuestion('')
+      setTimeout(fetchResult, 1500)
+    } catch (err: any) {
+      console.error('Failed to request QA:', err)
+      alert('QAのリクエストに失敗しました')
+    } finally {
+      setIsQaSubmitting(false)
     }
   }
 
@@ -129,9 +175,8 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
   }
 
   const { transcript, corrected_transcript, audio_file } = result
-  const displayText = viewMode === 'corrected' && corrected_transcript 
-    ? corrected_transcript.corrected_text 
-    : transcript.text
+  const proofreadText = corrected_transcript?.corrected_text
+  const displayText = activeTab === 'proofread' && proofreadText ? proofreadText : transcript.text
 
   return (
     <div className="space-y-6">
@@ -147,86 +192,133 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
         </div>
       )}
 
-      {/* 校正ボタン */}
-      {!corrected_transcript && (
-        <div>
-          <button
-            onClick={handleCorrection}
-            disabled={isCorrecting}
-            className="btn-primary"
-          >
-            {isCorrecting ? 'LLM校正中...' : 'LLMで校正する'}
-          </button>
-          <p className="text-sm text-gray-500 mt-2">
-            GPT-4oで誤変換を修正し、読みやすいテキストに校正します
-          </p>
-        </div>
-      )}
+      {/* タブ */}
+      <div className="flex space-x-2">
+        <button
+          onClick={() => setActiveTab('original')}
+          className={`px-4 py-2 rounded ${activeTab === 'original' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+        >
+          Original
+        </button>
+        <button
+          onClick={() => setActiveTab('proofread')}
+          className={`px-4 py-2 rounded ${activeTab === 'proofread' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+        >
+          Proofread
+        </button>
+        <button
+          onClick={() => setActiveTab('qa')}
+          className={`px-4 py-2 rounded ${activeTab === 'qa' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+        >
+          QA
+        </button>
+      </div>
 
-      {/* 表示モード切り替え */}
-      {corrected_transcript && (
-        <div className="flex space-x-2">
-          <button
-            onClick={() => setViewMode('original')}
-            className={`px-4 py-2 rounded ${viewMode === 'original' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-          >
-            元のテキスト
-          </button>
-          <button
-            onClick={() => setViewMode('corrected')}
-            className={`px-4 py-2 rounded ${viewMode === 'corrected' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-          >
-            校正後
-          </button>
-          <button
-            onClick={() => setViewMode('comparison')}
-            className={`px-4 py-2 rounded ${viewMode === 'comparison' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-          >
-            並列表示
-          </button>
-        </div>
-      )}
-
-      {/* 文字起こし結果 */}
-      {viewMode === 'comparison' && corrected_transcript ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <h3 className="font-medium text-gray-900 mb-2">元のテキスト</h3>
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 h-96 overflow-y-auto">
-              <p className="whitespace-pre-wrap text-sm">{transcript.text}</p>
-            </div>
-          </div>
-          <div>
-            <h3 className="font-medium text-gray-900 mb-2">校正後</h3>
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 h-96 overflow-y-auto">
-              <p className="whitespace-pre-wrap text-sm">{corrected_transcript.corrected_text}</p>
-            </div>
-          </div>
-        </div>
-      ) : (
+      {/* タブ内容 */}
+      {activeTab === 'original' && (
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
           <div className="flex justify-between items-center mb-2">
-            <h3 className="font-medium text-gray-900">
-              {viewMode === 'corrected' ? '校正後テキスト' : '文字起こしテキスト'}
-            </h3>
-            <button
-              onClick={() => handleCopy(displayText)}
-              className="text-sm text-primary-600 hover:text-primary-700"
-            >
+            <h3 className="font-medium text-gray-900">文字起こしテキスト</h3>
+            <button onClick={() => handleCopy(transcript.text)} className="text-sm text-primary-600 hover:text-primary-700">
               {copied ? '✓ コピーしました' : 'コピー'}
             </button>
           </div>
           <div className="max-h-96 overflow-y-auto">
-            <p className="whitespace-pre-wrap text-sm">{displayText}</p>
+            <p className="whitespace-pre-wrap text-sm">{transcript.text}</p>
           </div>
         </div>
       )}
 
-      {/* 変更サマリー */}
-      {corrected_transcript?.changes_summary && viewMode !== 'original' && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="font-medium text-blue-900 mb-2">校正内容</h3>
-          <p className="text-sm text-blue-800">{corrected_transcript.changes_summary}</p>
+      {activeTab === 'proofread' && (
+        <div className="space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center md:space-x-4 space-y-3 md:space-y-0">
+            <div className="flex items-center space-x-2">
+              <label className="text-sm text-gray-700">LLMモデル:</label>
+              <select
+                value={proofreadModel}
+                onChange={(e) => setProofreadModel(e.target.value)}
+                className="input-field"
+              >
+                <option value="gpt-4o-mini">GPT-4o Mini</option>
+                <option value="gpt-4o">GPT-4o</option>
+              </select>
+            </div>
+            <button
+              onClick={() => triggerProofread(proofreadModel)}
+              disabled={isProofreading}
+              className="btn-primary"
+            >
+              {isProofreading ? 'Proofread中...' : 'Proofreadを実行'}
+            </button>
+          </div>
+
+          {proofreadText ? (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="font-medium text-green-900">Proofread結果</h3>
+                <button onClick={() => handleCopy(proofreadText)} className="text-sm text-green-700 hover:text-green-800">
+                  {copied ? '✓ コピーしました' : 'コピー'}
+                </button>
+              </div>
+              <div className="max-h-96 overflow-y-auto">
+                <p className="whitespace-pre-wrap text-sm">{proofreadText}</p>
+              </div>
+              {corrected_transcript?.changes_summary && (
+                <p className="text-sm text-green-800 mt-3">{corrected_transcript.changes_summary}</p>
+              )}
+            </div>
+          ) : (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
+              Proofread結果はまだありません。ボタンを押して実行してください。
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'qa' && (
+        <div className="space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center md:space-x-4 space-y-3 md:space-y-0">
+            <div className="flex-1">
+              <input
+                type="text"
+                value={qaQuestion}
+                onChange={(e) => setQaQuestion(e.target.value)}
+                placeholder="質問を入力してください"
+                className="input-field w-full"
+              />
+            </div>
+            <div className="flex items-center space-x-2">
+              <select
+                value={qaModel}
+                onChange={(e) => setQaModel(e.target.value)}
+                className="input-field"
+              >
+                <option value="gpt-4o-mini">GPT-4o Mini</option>
+                <option value="gpt-4o">GPT-4o</option>
+              </select>
+              <button
+                onClick={triggerQa}
+                disabled={isQaSubmitting}
+                className="btn-primary"
+              >
+                {isQaSubmitting ? '送信中...' : '質問する'}
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-4 max-h-96 overflow-y-auto">
+            {qaHistory.length === 0 && (
+              <p className="text-sm text-gray-600">まだQA結果がありません。質問を送信してください。</p>
+            )}
+            {qaHistory.map((qa, idx) => (
+              <div key={`${qa.created_at}-${idx}`} className="space-y-2">
+                <div className="text-sm font-medium text-gray-900">Q: {qa.question}</div>
+                <div className="text-sm text-gray-800 whitespace-pre-wrap">A: {qa.answer}</div>
+                <div className="text-xs text-gray-500">モデル: {qa.qa_model || '不明'} / {new Date(qa.created_at).toLocaleString()}</div>
+                {idx < qaHistory.length - 1 && <hr className="border-gray-200" />}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

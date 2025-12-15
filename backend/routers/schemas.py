@@ -2,7 +2,7 @@
 Pydantic schemas for API request/response models
 """
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field, HttpUrl, validator
 
 
@@ -115,9 +115,11 @@ class JobResultResponse(BaseModel):
     """
     job_id: str
     status: str
+    model: Optional[str] = None
     audio_file: Optional[AudioFileInfo] = None
     transcript: Optional[TranscriptInfo] = None
     corrected_transcript: Optional[CorrectedTranscriptInfo] = None
+    qa_results: Optional[List["QaResultInfo"]] = None
     error_message: Optional[str] = None
     
     class Config:
@@ -146,6 +148,58 @@ class CorrectTranscriptResponse(BaseModel):
     job_id: str
     status: str
     message: str
+
+
+class ProofreadRequest(BaseModel):
+    proofread_model: str = Field(default="gpt-4o-mini", description="LLM model for proofreading")
+
+    @validator('proofread_model')
+    def validate_proofread_model(cls, v):
+        valid_models = ['gpt-4o-mini', 'gpt-4o']
+        if v not in valid_models:
+            raise ValueError(f'Proofread model must be one of {valid_models}')
+        return v
+
+
+class ProofreadResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+class QaRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="User question for QA")
+    qa_model: str = Field(default="gpt-4o-mini", description="LLM model for QA")
+
+    @validator('qa_model')
+    def validate_qa_model(cls, v):
+        valid_models = ['gpt-4o-mini', 'gpt-4o']
+        if v not in valid_models:
+            raise ValueError(f'QA model must be one of {valid_models}')
+        return v
+
+
+class QaResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+class QaResultInfo(BaseModel):
+    question: str
+    answer: str
+    qa_model: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Resolve forward references (Pydantic v1/v2 compatible)
+try:
+    JobResultResponse.model_rebuild()
+except AttributeError:
+    JobResultResponse.update_forward_refs()
 
 
 class HealthResponse(BaseModel):

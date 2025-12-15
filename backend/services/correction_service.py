@@ -232,20 +232,24 @@ Return only the corrected text without explanations."""
             # Calculate changes summary
             changes_summary = self._calculate_changes_summary(transcript_text, corrected_text)
             
-            result = {
-                'success': True,
-                'corrected_text': corrected_text,
-                'original_text': transcript_text,
-                'changes_summary': changes_summary,
-                'model': model
-            }
-            
+            result = CorrectionResult(
+                success=True,
+                corrected_text=corrected_text,
+                original_text=transcript_text,
+                changes_summary=changes_summary,
+                model=model,
+            )
+
             logger.info("Correction completed successfully")
             return result
             
         except Exception as e:
             logger.error(f"Correction error: {e}")
-            return {
-                'success': False,
-                'error': f"Correction failed: {str(e)}"
-            }
+            return CorrectionResult(
+                success=False,
+                error=f"Correction failed: {str(e)}"
+            )
+
+    def correct_transcript(self, transcript: str, language: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
+        """Alias kept for backward compatibility with worker"""
+        return self.correct(transcript_text=transcript, language=language, model=model)

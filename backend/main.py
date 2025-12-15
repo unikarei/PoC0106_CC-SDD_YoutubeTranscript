@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 
 from database import engine, Base
 from routers import jobs, export, health
@@ -32,9 +33,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # Startup
     logger.info("Starting YouTube Transcription API")
     
-    # Create database tables
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables created/verified")
+    # Database schema is managed by Alembic migrations.
+    logger.info("Database schema is managed by Alembic migrations")
     
     yield
     
@@ -67,11 +67,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """
     Handle validation errors with structured response
     """
-    logger.warning(f"Validation error: {exc.errors()}")
+    # Pydantic v2 error contexts can include non-JSON-serializable objects (e.g. ValueError)
+    # so ensure we encode errors before returning them.
+    encoded_errors = jsonable_encoder(exc.errors())
+    logger.warning(f"Validation error: {encoded_errors}")
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
-            "detail": exc.errors(),
+            "detail": encoded_errors,
             "message": "Request validation failed"
         }
     )

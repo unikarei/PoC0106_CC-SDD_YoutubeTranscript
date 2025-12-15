@@ -27,6 +27,21 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-youtube_transcription}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./alembic.ini:/app/alembic.ini
+      - ./alembic:/app/alembic
+    command: alembic upgrade head
+
   api:
     build:
       context: .
@@ -34,17 +49,21 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/youtube_transcription}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-youtube_transcription}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     volumes:
       - ./backend:/app
       - ./audio_files:/app/audio_files
+      - ./alembic.ini:/app/alembic.ini
+      - ./alembic:/app/alembic
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -52,17 +71,21 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/youtube_transcription}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-youtube_transcription}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     volumes:
       - ./backend:/app
       - ./audio_files:/app/audio_files
+      - ./alembic.ini:/app/alembic.ini
+      - ./alembic:/app/alembic
     # Listen to the dedicated queues defined in celery_config.task_routes
     command: celery -A worker worker --loglevel=info -Q transcription,correction
 

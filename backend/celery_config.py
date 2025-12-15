@@ -39,6 +39,9 @@ task_time_limit = 3900  # 1 hour 5 minutes hard limit
 task_routes = {
     "worker.transcription_task": {"queue": "transcription"},
     "worker.correction_task": {"queue": "correction"},
+    # These tasks should be consumed by the existing worker queues.
+    "worker.proofread_task": {"queue": "correction"},
+    "worker.qa_task": {"queue": "correction"},
 }
 
 # Result Expiration
