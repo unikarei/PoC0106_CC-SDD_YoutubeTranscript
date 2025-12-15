@@ -50,6 +50,13 @@ OPENAI_API_KEY=your_actual_api_key_here
 docker-compose up -d
 ```
 
+Or use the helper script:
+
+```bash
+chmod +x start_app.sh
+./start_app.sh
+```
+
 ### 4. Verify Services
 
 ```bash
