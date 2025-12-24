@@ -2,7 +2,7 @@
 Pydantic schemas for API request/response models
 """
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, HttpUrl, validator
 
 
@@ -36,7 +36,7 @@ class TranscribeJobRequest(BaseModel):
     @validator('model')
     def validate_model(cls, v):
         """Validate transcription model"""
-        valid_models = ['gpt-4o-mini-transcribe', 'gpt-4o-transcribe']
+        valid_models = ['gpt-4o-mini-transcribe', 'gpt-4o-transcribe', 'whisper-1']
         if v not in valid_models:
             raise ValueError(f'Model must be one of {valid_models}')
         return v
@@ -57,6 +57,8 @@ class JobStatusResponse(BaseModel):
     """
     job_id: str
     status: str
+    stage: Optional[str] = Field(default=None, description="Granular stage (download_extract|preprocess|transcribe|merge|export)")
+    stage_detail: Optional[Dict[str, Any]] = Field(default=None, description="Structured stage details (e.g., chunk index/count)")
     progress: int
     youtube_url: str
     language: str

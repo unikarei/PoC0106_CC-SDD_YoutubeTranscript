@@ -101,6 +101,7 @@ sequenceDiagram
     participant Worker
     participant DB
     participant yt-dlp
+    participant Preprocess
     participant Whisper
     participant GPT
 
@@ -115,9 +116,18 @@ sequenceDiagram
     Worker->>DB: ステータス更新 (status: processing)
     Worker->>yt-dlp: 音声抽出リクエスト
     yt-dlp-->>Worker: 音声ファイル(M4A)
-    Worker->>DB: ステータス更新 (status: transcribing)
-    Worker->>Whisper: 文字起こしリクエスト
-    Whisper-->>Worker: 文字起こしテキスト
+    Worker->>DB: ステータス更新 (stage: preprocess)
+    Worker->>Preprocess: 前処理（圧縮/分割）
+    Preprocess-->>Worker: chunks[]
+    Worker->>DB: ステータス更新 (stage: transcribe)
+    loop チャンクごと
+        Worker->>Whisper: 文字起こしリクエスト(chunk)
+        Whisper-->>Worker: 文字起こし(タイムスタンプ付き)
+        Worker->>DB: 進捗更新 (chunk index)
+    end
+    Worker->>DB: ステータス更新 (stage: merge)
+    Worker->>Worker: チャンク結合（オーバーラップ考慮）
+    Worker->>DB: ステータス更新 (stage: export)
     Worker->>DB: 結果保存 (status: completed)
     
     Frontend->>API: GET /api/jobs/{job_id}/status
@@ -140,6 +150,7 @@ sequenceDiagram
 - ポーリングによるステータス確認（WebSocketは将来拡張）
 - 校正は別ジョブとして実行（ユーザー選択制）
 - 各処理ステージでDB更新により進捗を追跡可能
+ - OpenAIアップロード制限（最大25MB）に備え、音声前処理（圧縮/分割）をワーカー内に追加
 
 ## 要件トレーサビリティ
 
@@ -164,6 +175,7 @@ sequenceDiagram
 | APIService | Backend/API | ジョブ管理、リクエスト処理 | 全要件 | JobManager (P0), Queue (P0) | API |
 | JobManager | Backend/Core | ジョブライフサイクル管理 | 全要件 | Database (P0) | Service |
 | AudioExtractor | Worker/Processing | YouTube音声抽出 | 2 | yt-dlp (P0), FileStorage (P0) | Service |
+| AudioPreprocessor | Worker/Processing | 音声の圧縮/分割でアップロード制限内に収める | 9, 10 | ffmpeg (P0), FileStorage (P0) | Service |
 | TranscriptionService | Worker/Processing | 音声→テキスト変換 | 3, 4 | Whisper API (P0), FileStorage (P0) | Service |
 | CorrectionService | Worker/Processing | LLMテキスト校正 | 7 | GPT API (P0) | Service |
 | ExportService | Backend/Processing | 複数形式エクスポート | 5 | FileFormatter (P1) | Service |
@@ -284,16 +296,36 @@ class JobStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class JobStage(Enum):
+    DOWNLOAD_EXTRACT = "download_extract"
+    PREPROCESS = "preprocess"
+    TRANSCRIBE = "transcribe"
+    MERGE = "merge"
+    EXPORT = "export"
+
 class JobManager:
     def create_job(self, youtube_url: str, language: str, model: str) -> str:
         """新規ジョブを作成し、ジョブIDを返す"""
         pass
     
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        """ジョブのステータスと進捗を取得"""
+        """ジョブのステータスと進捗を取得
+
+        互換性のため status/progress は維持しつつ、必要に応じて stage/stage_detail を返す。
+        - stage: download_extract|preprocess|transcribe|merge|export
+        - stage_detail: 例 {"chunk_index": 3, "chunk_count": 12, "chunk_size_bytes": 1234567}
+        """
         pass
     
-    def update_job_status(self, job_id: str, status: JobStatus, progress: int = 0, error: Optional[str] = None) -> None:
+    def update_job_status(
+        self,
+        job_id: str,
+        status: JobStatus,
+        progress: int = 0,
+        error: Optional[str] = None,
+        stage: Optional[JobStage] = None,
+        stage_detail: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """ジョブステータスを更新"""
         pass
     
@@ -366,6 +398,89 @@ class AudioExtractor:
 - Validation: URL形式チェック、動画長チェック（60分制限）
 - Risks: YouTube側の変更による互換性問題（yt-dlp定期更新で対応）
 
+#### AudioPreprocessor
+
+| フィールド | 詳細 |
+|-------|--------|
+| 意図 | 音声の圧縮/分割により、OpenAIアップロード制限内（デフォルト25MB）に収める |
+| 要件 | 9, 10 |
+
+**責任と制約**
+- 音声ファイルのサイズ判定（MAX_UPLOAD_MB）
+- サイズ超過時の前処理（圧縮・分割）
+- 音声認識に適した設定（モノラル、16kHz/24kHz、安定したコーデック、音声向けビットレート）
+- チャンク作成（オーバーラップ付与）とメタデータ生成
+- ジョブ単位の作業ディレクトリ管理（成功/失敗時のクリーンアップ）
+
+**依存関係**
+- Inbound: Worker — 前処理リクエスト (P0)
+- External: ffmpeg — 変換/分割 (P0)
+- Outbound: FileStorage — ファイル入出力 (P0)
+- Outbound: JobManager — 進捗・エラー更新 (P0)
+
+**契約**: Service [✓] / API [ ] / Event [ ] / Batch [ ] / State [ ]
+
+##### Data Structures
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Chunk:
+    path: str
+    index: int
+    start_offset_sec: float
+    duration_sec: float
+    size_bytes: int
+```
+
+##### Service Interface
+
+```python
+from dataclasses import dataclass
+from typing import List, Optional, Literal
+
+@dataclass
+class PreprocessPlan:
+    strategy: Literal["as_is", "compress", "compress_then_split"]
+    input_size_bytes: int
+    target_upload_bytes: int
+    chunk_overlap_sec: float
+    chunks: List[Chunk]
+
+@dataclass
+class PreprocessResult:
+    success: bool
+    plan: Optional[PreprocessPlan]
+    error: Optional[str]
+
+class AudioPreprocessor:
+    def prepare_for_upload(self, audio_file_path: str, job_id: str) -> PreprocessResult:
+        """アップロード制限に収まるように音声を前処理し、チャンク一覧を返す"""
+        pass
+```
+
+##### アルゴリズム（決定事項）
+
+**戦略決定（圧縮優先 → 分割）**
+- まず安定した音声向け設定で圧縮（再サンプリング・モノラル化・固定ビットレート）し、その結果がTARGET_UPLOAD_MB未満なら単一ファイルで送信する。
+- それでも超過する場合のみ、圧縮済みファイルを分割する。
+- **合理性**: 入力（M4A/WebM等）はVBRでサイズ推定が難しく、先に圧縮してCBR相当へ寄せるとチャンクサイズ予測が安定し、チャンク数も減らせる。
+
+**チャンク長プランニング（サイズ→時間）**
+- 目標サイズ: `target_upload_bytes = TARGET_UPLOAD_MB * 1024 * 1024`
+- 想定バイト/秒: `bytes_per_sec ≈ (AUDIO_BITRATE_KBPS * 1000) / 8`
+- 安全マージン込みの最大チャンク長（概念）: `chunk_duration_sec = floor((target_upload_bytes * 0.98) / bytes_per_sec)`
+- オーバーラップ: `CHUNK_OVERLAP_SEC`（デフォルト0.8秒）を各チャンクの前後に付与（先頭/末尾は境界に収める）
+
+**結合と重複（制限付き）**
+- テキスト結合はオーバーラップ区間の簡易重複除去（例: 先頭数十文字の一致でトリミング）を行う。
+- 限界: 完全な話者同定・語彙正規化・高度なアラインメントは非ゴール。
+
+**エラーハンドリングとクリーンアップ**
+- 失敗時は「どのチャンク（index）が、どのステップで」失敗したかをエラーメッセージに含める。
+- 作業ディレクトリは `job_id` 単位で作成し、成功時は保持/削除を設定可能とする（デフォルトは削除）。
+
 #### TranscriptionService
 
 | フィールド | 詳細 |
@@ -378,6 +493,7 @@ class AudioExtractor:
 - 言語指定（日本語/英語）
 - ストリーミング対応（進捗更新）
 - 文字起こしテキストの保存
+ - 大容量音声はAudioPreprocessorでチャンク化し、チャンクごとに文字起こしを実行
 
 **依存関係**
 - Inbound: Worker — 文字起こしリクエスト (P0)
@@ -421,7 +537,7 @@ class TranscriptionService:
 
 **実装ノート**
 - Integration: OpenAI Python SDK使用、ストリーミングモードで進捗更新
-- Validation: ファイルサイズチェック（25MB制限）、音声形式検証
+- Validation: アップロード上限（MAX_UPLOAD_MB）に対するサイズチェック、音声形式検証
 - Risks: API レート制限、タイムアウト（リトライロジック実装）
 
 #### CorrectionService
@@ -488,6 +604,7 @@ class CorrectionService:
 - SRT形式エクスポート（字幕ファイル）
 - VTT形式エクスポート（WebVTT字幕）
 - タイムスタンプ付き字幕生成
+ - チャンク分割された場合も、タイムスタンプをチャンク開始オフセットで補正して連続したSRT/VTTを生成
 
 **依存関係**
 - Inbound: APIService — エクスポートリクエスト (P0)

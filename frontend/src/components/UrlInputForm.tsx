@@ -81,7 +81,7 @@ export default function UrlInputForm({ onJobCreated, disabled }: UrlInputFormPro
           <p className="mt-1 text-sm text-red-600">{urlError}</p>
         )}
         <p className="mt-1 text-sm text-gray-500">
-          ※ 動画の長さは60分以内である必要があります
+          ※ 動画の長さはモデルにより制限があります（長い場合は自動で分割して処理されます）
         </p>
       </div>
 

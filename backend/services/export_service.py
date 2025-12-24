@@ -48,7 +48,12 @@ class ExportService:
         logger.info("Exported transcript to TXT format")
         return transcript
     
-    def export_to_srt(self, transcript: str, duration_seconds: int) -> str:
+    def export_to_srt(
+        self,
+        transcript: str,
+        duration_seconds: int,
+        segments: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """
         Export transcript to SRT subtitle format
         
@@ -62,8 +67,11 @@ class ExportService:
         if not transcript:
             return ""
         
-        # Split into segments
-        segments = self._split_into_segments(transcript, duration_seconds)
+        # Prefer timestamped segments when provided
+        if segments:
+            segments = list(segments)
+        else:
+            segments = self._split_into_segments(transcript, duration_seconds)
         
         # Build SRT format
         srt_lines = []
@@ -73,12 +81,12 @@ class ExportService:
             srt_lines.append(str(i))
             
             # Timestamps
-            start_time = self._format_srt_timestamp(segment['start'])
-            end_time = self._format_srt_timestamp(segment['end'])
+            start_time = self._format_srt_timestamp(float(segment.get('start', 0.0)))
+            end_time = self._format_srt_timestamp(float(segment.get('end', 0.0)))
             srt_lines.append(f"{start_time} --> {end_time}")
             
             # Text
-            srt_lines.append(segment['text'])
+            srt_lines.append((segment.get('text') or '').strip())
             
             # Blank line separator
             srt_lines.append("")
@@ -86,7 +94,12 @@ class ExportService:
         logger.info(f"Exported transcript to SRT format ({len(segments)} segments)")
         return "\n".join(srt_lines)
     
-    def export_to_vtt(self, transcript: str, duration_seconds: int) -> str:
+    def export_to_vtt(
+        self,
+        transcript: str,
+        duration_seconds: int,
+        segments: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """
         Export transcript to WebVTT format
         
@@ -100,20 +113,23 @@ class ExportService:
         if not transcript:
             return "WEBVTT\n\n"
         
-        # Split into segments
-        segments = self._split_into_segments(transcript, duration_seconds)
+        # Prefer timestamped segments when provided
+        if segments:
+            segments = list(segments)
+        else:
+            segments = self._split_into_segments(transcript, duration_seconds)
         
         # Build VTT format
         vtt_lines = ["WEBVTT", ""]
         
         for segment in segments:
             # Timestamps
-            start_time = self._format_vtt_timestamp(segment['start'])
-            end_time = self._format_vtt_timestamp(segment['end'])
+            start_time = self._format_vtt_timestamp(float(segment.get('start', 0.0)))
+            end_time = self._format_vtt_timestamp(float(segment.get('end', 0.0)))
             vtt_lines.append(f"{start_time} --> {end_time}")
             
             # Text
-            vtt_lines.append(segment['text'])
+            vtt_lines.append((segment.get('text') or '').strip())
             
             # Blank line separator
             vtt_lines.append("")

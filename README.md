@@ -25,6 +25,10 @@ YouTube動画の音声を抽出し、日本語・英語の文字起こしとLLM�
 
 - Docker & Docker Compose
 - OpenAI API Key
+- ffmpeg（大容量音声の自動圧縮/分割に使用）
+
+> NOTE (WSL2 + Docker Desktop): WSL ディストリビューション側で `docker` が見えない場合、Docker Desktop の
+> Settings → Resources → WSL Integration で使用中のディストリを有効化してから再試行してください。
 
 ## Quick Start
 
@@ -47,6 +51,12 @@ OPENAI_API_KEY=your_actual_api_key_here
 ### 3. Start Services
 
 ```bash
+docker compose up -d
+```
+
+If your environment still uses the legacy `docker-compose` command, you can run:
+
+```bash
 docker-compose up -d
 ```
 
@@ -57,10 +67,16 @@ chmod +x start_app.sh
 ./start_app.sh
 ```
 
+To start the UI as well:
+
+```bash
+./start_app.sh --with-frontend
+```
+
 ### 4. Verify Services
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 All services (postgres, redis, api, worker) should be running.
@@ -85,12 +101,37 @@ npm run dev
 ### Run Tests
 
 ```bash
+# Create venv (PEP 668 environment requires venv)
+python3 -m venv .venv
+. .venv/bin/activate
+
 # Install dependencies
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 # Run tests
 pytest tests/
 ```
+
+## Large File Support (over 25MB)
+
+OpenAI の音声アップロード制限（デフォルト 25MB）を超える場合、ワーカーが自動で以下を行います：
+
+- まず音声を **音声認識向けに圧縮**（mono / 16kHz / mp3 / 低ビットレート）
+- それでも大きい場合は **分割**（チャンク間に短いオーバーラップを付与）
+- 各チャンクを個別に文字起こしし、**タイムスタンプ（segments）をオフセットで連結**
+
+### Environment Variables
+
+- `MAX_UPLOAD_MB`：入力ファイルの防御的な上限（デフォルト `25`）
+- `TARGET_UPLOAD_MB`：圧縮/分割後に目指す上限（安全マージン、デフォルト `24`）
+- `AUDIO_BITRATE_KBPS`：圧縮時のビットレート（デフォルト `48`）
+- `CHUNK_OVERLAP_SEC`：分割チャンクのオーバーラップ秒（デフォルト `0.8`）
+- `MAX_SINGLE_CHUNK_SEC`：サイズが小さくても長時間音声を分割する閾値（デフォルト `900`）。長い音声を1リクエストで投げると末尾が欠ける場合があるため、安定化のために分割します。`0` 以下で無効化。
+
+### Notes
+
+- `ffmpeg` が PATH に無い場合、大容量ファイルの処理は失敗します。
+- タイムスタンプは可能な場合に `verbose_json` の `segments` を保存し、SRT/VTT 出力に利用します。モデルやAPI仕様により segments が得られない場合は従来方式（均等割り当て）にフォールバックします。
 
 ### Database Migrations
 
@@ -120,16 +161,18 @@ chmod +x start_worker.sh
 celery -A backend.worker worker --loglevel=info --concurrency=2
 ```
 
+NOTE: Celery worker は自動リロードしません。バックエンドコードを変更した場合は worker を再起動してください。
+
 ### Stop Services
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ### Clean Up (including volumes)
 
 ```bash
-docker-compose down -v
+docker compose down -v
 ```
 
 ## Project Structure
@@ -215,6 +258,10 @@ docker-compose down -v
 
 ### Export
 - `GET /api/jobs/{job_id}/export?format=txt|srt|vtt` - Export transcript
+
+Notes:
+- 校正済み（`corrected_transcript` が存在）なら、エクスポートは校正後テキストが優先されます。
+- SRT/VTT の `segments` はオリジナル transcript 側（`transcripts.segments_json`）から読み込みます。
 
 ### Monitoring
 - `GET /health` - Health check

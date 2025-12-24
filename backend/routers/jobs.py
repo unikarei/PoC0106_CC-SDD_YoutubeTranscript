@@ -2,6 +2,7 @@
 Job management endpoints
 """
 import logging
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -103,9 +104,18 @@ async def get_job_status(
                 detail=f"Job {job_id} not found"
             )
         
+        stage_detail = None
+        if job.stage_detail:
+            try:
+                stage_detail = json.loads(job.stage_detail)
+            except Exception:
+                stage_detail = None
+
         return JobStatusResponse(
             job_id=job.id,
             status=job.status,
+            stage=job.stage,
+            stage_detail=stage_detail,
             progress=job.progress,
             youtube_url=job.youtube_url,
             language=job.language,

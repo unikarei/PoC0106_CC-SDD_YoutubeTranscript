@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 import logging
 from datetime import datetime
+import json
 
 from database import SessionLocal
 from models import Job, AudioFile, Transcript, CorrectedTranscript, QaResult
@@ -87,7 +88,14 @@ class JobManager:
         finally:
             self._close_db(db)
     
-    def update_job_status(self, job_id: str, status: str, error_message: Optional[str] = None):
+    def update_job_status(
+        self,
+        job_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        stage: Optional[str] = None,
+        stage_detail: Optional[Dict[str, Any]] = None,
+    ):
         """
         Update job status
         
@@ -95,6 +103,8 @@ class JobManager:
             job_id: Job identifier
             status: New status
             error_message: Error message if status is failed
+            stage: Optional granular stage (download_extract|preprocess|transcribe|merge|export)
+            stage_detail: Optional structured detail (e.g., chunk index/count)
         """
         db = self._get_db()
         try:
@@ -103,6 +113,13 @@ class JobManager:
                 job.status = status
                 if error_message:
                     job.error_message = error_message
+
+                if stage is not None:
+                    job.stage = stage
+
+                if stage_detail is not None:
+                    job.stage_detail = json.dumps(stage_detail, ensure_ascii=False)
+
                 job.updated_at = datetime.utcnow()
                 db.commit()
                 
@@ -156,6 +173,8 @@ class JobManager:
             return {
                 "job_id": job.id,
                 "status": job.status,
+                "stage": job.stage,
+                "stage_detail": job.stage_detail,
                 "progress": job.progress,
                 "error_message": job.error_message,
                 "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -219,11 +238,23 @@ class JobManager:
         """
         db = self._get_db()
         try:
+            segments = metadata.get("segments")
+            segments_json = None
+            # Only persist segments when we actually have timestamped data.
+            # Treat empty list as "no timestamps".
+            if segments:
+                try:
+                    segments_json = json.dumps(segments, ensure_ascii=False)
+                except TypeError:
+                    # Best-effort fallback
+                    segments_json = json.dumps(list(segments), ensure_ascii=False)
+
             transcript_record = Transcript(
                 job_id=job_id,
                 text=transcript,
                 language_detected=metadata.get('language_detected'),
-                transcription_model=metadata.get('model')
+                transcription_model=metadata.get('model'),
+                segments_json=segments_json,
             )
             db.add(transcript_record)
             db.commit()

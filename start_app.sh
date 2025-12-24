@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euo pipefail                              # エラー時停止(-e)・未定義変数エラー(-u)・パイプ失敗検出(pipefail)
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")"                         # スクリプト自身のディレクトリへ移動（実行場所に依存しない）
+
+# ------------------------------------------------------------
+# 使い方表示（--help / -h のときに表示するメッセージ）
+# ------------------------------------------------------------
 
 usage() {
-  cat <<'EOF'
+  cat <<'EOF'                                  # Usage文字列を標準出力へ（'EOF' なので変数展開しない）
 Usage:
   ./start_app.sh [--foreground] [--no-build] [--logs] [--with-frontend]
 
@@ -14,101 +18,212 @@ Options:
   --foreground     Run docker compose in the foreground (no -d)
   --no-build       Do not rebuild images
   --logs           After starting (detached), follow api/worker logs
-  --with-frontend  Also start Next.js dev server (requires Node.js)
+  --with-frontend  Also start Next.js dev server (opens http://localhost:3000)
 EOF
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then  # 先頭引数がヘルプなら…（引数なしでも安全に評価）
+  usage                                        # 使い方を表示
+  exit 0                                       # 正常終了
 fi
 
-# Load environment variables (especially OPENAI_API_KEY) if .env exists.
-# docker compose also reads .env automatically, but we validate here.
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
+# ------------------------------------------------------------
+# .env の読み込み（特に OPENAI_API_KEY）
+# - docker compose も .env は自動読込するが、ここでは必須値の検証のために読み込む
+# - Windows由来のCRLF(\r)を除去して source できるようにする
+# ------------------------------------------------------------
+if [[ -f .env ]]; then                          # .env が存在する場合のみ
+  set -a                                        # 以降に定義される変数を自動 export
+  # shellcheck disable=SC1090                   # 動的source（プロセス置換）を許容
+  source <(sed 's/\r$//' .env)                  # 行末の \r を落としてから読み込み
+  set +a                                        # 自動 export を解除
 fi
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "ERROR: OPENAI_API_KEY is not set." >&2
-  echo "- Put it in .env (recommended), or" >&2
-  echo "- export OPENAI_API_KEY=..." >&2
-  exit 1
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then        # APIキーが未設定なら…（未定義でも安全に展開）
+  echo "ERROR: OPENAI_API_KEY is not set." >&2  # エラーをstderrへ
+  echo "- Put it in .env (recommended), or" >&2  # 設定方法の案内
+  echo "- export OPENAI_API_KEY=..." >&2        # 設定方法の案内
+  exit 1                                        # 失敗終了（この先は動かさない）
 fi
 
-if docker compose version >/dev/null 2>&1; then
-  DC=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  DC=(docker-compose)
+# ------------------------------------------------------------
+# Docker の起動確認（Windows/WSL: Docker Desktop を自動起動して待つ）
+# - Git Bash / MSYS / Cygwin / WSL で実行されるケースを想定
+# - Linux/macOS はメッセージを出して終了（勝手に起動しない）
+# ------------------------------------------------------------
+is_windows_like() {
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+  esac
+  if [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+docker_daemon_ready() {
+  docker info >/dev/null 2>&1
+}
+
+open_url() {
+  local url="$1"
+
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Start-Process '$url'" \
+      >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c "start \"\" \"$url\"" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  echo "INFO: Please open: $url" >&2
+  return 0
+}
+
+start_docker_desktop() {
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command '
+$p1Base = [System.Environment]::GetEnvironmentVariable("ProgramFiles")
+$p2Base = [System.Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+$p1 = Join-Path $p1Base "Docker\Docker\Docker Desktop.exe"
+$p2 = if ($p2Base) { Join-Path $p2Base "Docker\Docker\Docker Desktop.exe" } else { $null }
+if (Test-Path $p1) { Start-Process -FilePath $p1 | Out-Null; exit 0 }
+elseif ($p2 -and (Test-Path $p2)) { Start-Process -FilePath $p2 | Out-Null; exit 0 }
+else { exit 2 }
+' >/dev/null 2>&1
+    return $?
+  fi
+
+  if command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c "start \"\" \"%ProgramFiles%\\Docker\\Docker\\Docker Desktop.exe\"" >/dev/null 2>&1 && return 0
+    cmd.exe /c "start \"\" \"%ProgramFiles(x86)%\\Docker\\Docker\\Docker Desktop.exe\"" >/dev/null 2>&1 && return 0
+    return 2
+  fi
+
+  return 127
+}
+
+if command -v docker >/dev/null 2>&1; then
+  if ! docker_daemon_ready; then
+    if is_windows_like; then
+      echo "Docker daemon is not reachable. Trying to start Docker Desktop..." >&2
+      if ! start_docker_desktop; then
+        echo "ERROR: Failed to start Docker Desktop automatically." >&2
+        echo "- Please start Docker Desktop manually and retry." >&2
+        exit 1
+      fi
+      echo "Waiting for Docker to become ready..." >&2
+      for _ in {1..60}; do
+        if docker_daemon_ready; then
+          break
+        fi
+        sleep 2
+      done
+      if ! docker_daemon_ready; then
+        echo "ERROR: Docker Desktop did not become ready in time." >&2
+        echo "- Please check Docker Desktop status and retry." >&2
+        exit 1
+      fi
+    else
+      echo "ERROR: Docker is not running (docker daemon unreachable)." >&2
+      echo "- Start Docker and retry." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# ------------------------------------------------------------
+# docker compose コマンドの決定
+# - v2: `docker compose`
+# - 互換: `docker-compose`
+# ------------------------------------------------------------
+if docker compose version >/dev/null 2>&1; then  # docker compose(v2) が使えるなら
+  DC=(docker compose)                            # 実行コマンドを配列で保持（空白を安全に扱う）
+elif command -v docker-compose >/dev/null 2>&1; then  # docker-compose(v1系) があるなら
+  DC=(docker-compose)                            # こちらを採用
 else
-  echo "ERROR: docker compose (v2) or docker-compose is required." >&2
-  exit 1
+  echo "ERROR: docker compose (v2) or docker-compose is required." >&2  # どちらも無ければ実行不可
+  exit 1                                        # 失敗終了
 fi
 
-DETACH=1
-BUILD=1
-FOLLOW_LOGS=0
-WITH_FRONTEND=0
+DETACH=1                                        # 1: detach(-d)で起動 / 0: フォアグラウンド
+BUILD=1                                         # 1: --build を付ける / 0: 付けない
+FOLLOW_LOGS=0                                   # 1: 起動後に logs -f を実行
+WITH_FRONTEND=0                                 # 1: frontend サービスも起動
 
-for arg in "$@"; do
-  case "$arg" in
+# ------------------------------------------------------------
+# 引数解析（フラグのみ対応）
+# ------------------------------------------------------------
+for arg in "$@"; do                             # すべての引数を順に評価
+  case "$arg" in                               # 引数ごとに分岐
     --foreground)
-      DETACH=0
+      DETACH=0                                  # -d を付けない（composeをフォアグラウンドで）
       ;;
     --no-build)
-      BUILD=0
+      BUILD=0                                   # イメージを再ビルドしない
       ;;
     --logs)
-      FOLLOW_LOGS=1
+      FOLLOW_LOGS=1                              # 起動後にログ追従する
       ;;
     --with-frontend)
-      WITH_FRONTEND=1
+      WITH_FRONTEND=1                            # frontend サービスも起動対象に入れる
       ;;
     *)
-      echo "Unknown option: $arg" >&2
-      usage
-      exit 2
+      echo "Unknown option: $arg" >&2           # 未知の引数はエラー
+      usage                                      # 使い方を表示
+      exit 2                                     # 使い方の誤り（一般的に2）
       ;;
   esac
 done
 
-UP_ARGS=(up)
-if [[ $DETACH -eq 1 ]]; then
-  UP_ARGS+=(-d)
+UP_ARGS=(up)                                    # docker compose の subcommand を配列で構築
+if [[ $DETACH -eq 1 ]]; then                     # detach指定なら
+  UP_ARGS+=(-d)                                  # `up -d`
 fi
-if [[ $BUILD -eq 1 ]]; then
-  UP_ARGS+=(--build)
-fi
-
-"${DC[@]}" "${UP_ARGS[@]}"
-
-"${DC[@]}" ps
-
-echo
-echo "Backend is starting." 
-echo "- API:  http://localhost:8000"
-echo "- Docs: http://localhost:8000/docs"
-echo
-
-if [[ $DETACH -eq 1 && $FOLLOW_LOGS -eq 1 ]]; then
-  "${DC[@]}" logs -f api worker
+if [[ $BUILD -eq 1 ]]; then                      # build指定なら
+  UP_ARGS+=(--build)                             # `--build` を付与
 fi
 
-if [[ $WITH_FRONTEND -eq 1 ]]; then
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "ERROR: npm is not installed. Install Node.js to run the frontend." >&2
-    exit 1
+SERVICES=(postgres redis migrate api worker)     # 起動するサービス一覧（compose.yml 側の定義名）
+if [[ $WITH_FRONTEND -eq 1 ]]; then              # フロントも起動するなら
+  SERVICES+=(frontend)                           # frontend を追加
+fi
+
+# ------------------------------------------------------------
+# 起動処理（compose up → 状態確認 → 必要ならログ追従）
+# ------------------------------------------------------------
+"${DC[@]}" "${UP_ARGS[@]}" "${SERVICES[@]}"      # compose を起動（配列展開で安全に引数を渡す）
+
+"${DC[@]}" ps                                  # 起動状態を表示（Up/healthy を確認）
+
+echo                                            # 1行空ける
+echo "Backend is starting."                    # 起動案内
+echo "- API:  http://localhost:8000"           # API URL
+echo "- Docs: http://localhost:8000/docs"      # Swagger URL
+echo                                            # 1行空ける
+
+if [[ $DETACH -eq 1 && $FOLLOW_LOGS -eq 1 ]]; then  # detach起動かつ logs 指定なら
+  if [[ $WITH_FRONTEND -eq 1 ]]; then              # frontend も含む場合
+    "${DC[@]}" logs -f api worker frontend        # api/worker/frontend のログを追従
+  else                                             # backendのみの場合
+    "${DC[@]}" logs -f api worker                 # api/worker のログを追従
   fi
+fi
 
-  echo
-  echo "Starting frontend (Next.js) on http://localhost:3000 ..."
-  pushd frontend >/dev/null
-  if [[ ! -d node_modules ]]; then
-    npm install
-  fi
-  npm run dev
-  popd >/dev/null
+if [[ $WITH_FRONTEND -eq 1 ]]; then              # フロント起動時はUI URLも案内
+  echo "- UI:   http://localhost:3000"          # UI URL
+  open_url "http://localhost:3000"
 fi

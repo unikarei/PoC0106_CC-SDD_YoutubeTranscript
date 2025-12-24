@@ -2,6 +2,16 @@
 Integration test script for YouTube Transcription API
 Tests the complete workflow: job creation -> transcription -> correction -> export
 """
+import os
+import pytest
+
+
+if not os.getenv("RUN_INTEGRATION"):
+    pytest.skip(
+        "Integration script (requires running API/worker + external services). Set RUN_INTEGRATION=1 to run.",
+        allow_module_level=True,
+    )
+
 import time
 import requests
 import sys
@@ -171,7 +181,7 @@ def main():
     # Note: In a real test, we would mock the services or use a short test video
     print("\n⚠️  Job monitoring skipped (requires worker and external services)")
     print("To test the full workflow:")
-    print("1. Start Docker Compose: docker-compose up")
+    print("1. Start Docker Compose: docker compose up")
     print("2. Ensure OpenAI API key is set in .env")
     print("3. Re-run this script")
     
@@ -187,7 +197,7 @@ def main():
     print("⚠️  Full workflow test requires worker services")
     print("\nNext steps:")
     print("- Start Docker Compose to test full workflow")
-    print("- Monitor logs: docker-compose logs -f")
+    print("- Monitor logs: docker compose logs -f")
     print("=" * 60)
 
 

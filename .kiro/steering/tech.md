@@ -92,8 +92,34 @@
 - REDIS_URL: Redis 接続文字列
 - OPENAI_API_KEY: OpenAI APIキー
 
+音声の圧縮/分割・安定性（大容量/長時間対策）:
+
+- MAX_UPLOAD_MB: 入力ファイルの防御的な上限（デフォルト 25MB）
+- TARGET_UPLOAD_MB: 圧縮/分割後に目指す上限（デフォルト 24MB）
+- AUDIO_BITRATE_KBPS: 圧縮時の音声ビットレート（デフォルト 48kbps）
+- CHUNK_OVERLAP_SEC: チャンク先頭に付与するオーバーラップ（デフォルト 0.8 秒）
+- MAX_SINGLE_CHUNK_SEC: サイズが小さくても長時間音声を分割する閾値（デフォルト 900 秒、0以下で無効化）
+
+## 起動・実行（開発の標準手順）
+
+- 標準起動: `./start_app.sh`
+- GUI も含める: `./start_app.sh --with-frontend`
+
+Windows/WSL の注意:
+
+- Docker Desktop 未起動時、`start_app.sh`/`start_worker.sh` は `docker info` を基準に検知し、可能なら Docker Desktop を自動起動して待機する。
+
+## エクスポートの仕様（実装上の事実）
+
+- エクスポート対象テキスト（TXT/SRT/VTT 共通）
+	- `corrected_transcript` が存在すれば校正後テキストを優先
+	- 無ければオリジナル transcript を使用
+- SRT/VTT の `segments` はオリジナル transcript 側（`transcripts.segments_json`）から取得する
+	- そのため「校正後テキスト + オリジナルsegments」という組み合わせになり得る
+
 ## 重要な技術的意思決定（今後も守る）
 
 - 起動時の Alembic 自動適用（migrate サービス）を維持し、スキーマ未適用で起動しない
 - Celery のルーティングと worker 購読キューの整合を維持し、「投げたのに実行されない」を防ぐ
 - エクスポートは校正文があれば優先する（表示とダウンロードの整合性）
+- 長時間音声の単発文字起こしは安定性リスクがあるため、`MAX_SINGLE_CHUNK_SEC` による分割を既定とする

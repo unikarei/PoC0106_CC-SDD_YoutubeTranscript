@@ -2,6 +2,7 @@
 Export endpoints for downloading transcripts
 """
 import logging
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -73,6 +74,14 @@ async def export_transcript(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No transcript available"
             )
+
+        # Load timestamped segments if available (from original transcript)
+        segments = None
+        if job.transcript and getattr(job.transcript, "segments_json", None):
+            try:
+                segments = json.loads(job.transcript.segments_json)
+            except Exception:
+                segments = None
         
         # Get audio duration
         duration_seconds = job.audio_file.duration_seconds if job.audio_file else 0
@@ -85,11 +94,11 @@ async def export_transcript(
             media_type = "text/plain"
             extension = "txt"
         elif format == 'srt':
-            content = export_service.export_to_srt(transcript_text, duration_seconds)
+            content = export_service.export_to_srt(transcript_text, duration_seconds, segments=segments)
             media_type = "application/x-subrip"
             extension = "srt"
         elif format == 'vtt':
-            content = export_service.export_to_vtt(transcript_text, duration_seconds)
+            content = export_service.export_to_vtt(transcript_text, duration_seconds, segments=segments)
             media_type = "text/vtt"
             extension = "vtt"
         

@@ -47,15 +47,30 @@
   - エラー時のステータス更新とログ記録
   - _Requirements: 2.2, 2.5_
 
+- [ ] 2.3 大容量音声の前処理サービス（圧縮/分割）の実装
+  - AudioPreprocessorサービスの追加（音声サイズ判定、圧縮、分割、チャンクメタデータ生成）
+  - 設定キーの導入（MAX_UPLOAD_MB, TARGET_UPLOAD_MB, CHUNK_OVERLAP_SEC, AUDIO_BITRATE_KBPS）
+  - 音声向け設定（mono, 16kHz/24kHz, mp3/opus, 32–64kbps）での再エンコード
+  - チャンク作成（オーバーラップ 0.5–1.0秒、デフォルト0.8秒）
+  - job_id単位の作業ディレクトリとクリーンアップ方針
+  - 構造化ログ（入力サイズ、戦略、チャンク数/サイズ）
+  - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 10.3, 10.4_
+
 - [ ] 3. 文字起こしサービスの実装
 - [x] 3.1 TranscriptionServiceの構築
   - OpenAI Whisper API連携（gpt-4o-mini-transcribe）
   - 音声ファイルの読み込みとAPI送信
   - 言語指定（日本語/英語）とプロンプトヒントの適用
-  - ファイルサイズチェック（25MB制限）
+  - AudioPreprocessor出力（単一ファイル or chunks）に対応し、チャンクごとにAPI送信
   - タイムスタンプ付き文字起こし結果の取得
   - レート制限とタイムアウト処理（サーキットブレーカーパターン）
   - _Requirements: 3.1, 3.2, 4.1, 4.2_
+
+- [ ] 3.3 チャンク結合（テキスト/タイムスタンプ）の実装
+  - チャンクのstart_offset_secを用いて、タイムスタンプを連続化
+  - オーバーラップ区間の簡易重複除去（基本デデュープ）
+  - 失敗時に「どのチャンクが失敗したか」をエラーへ含める
+  - _Requirements: 5.5, 9.6, 9.7_
 
 - [x] 3.2 文字起こし結果の処理と検証
   - 話者区別、句読点、段落分けの適用
@@ -86,8 +101,9 @@
   - SRT形式エクスポート（字幕ファイル、タイムスタンプ付き）
   - VTT形式エクスポート（WebVTT字幕）
   - タイムスタンプの均等配分ロジック（タイムスタンプ情報がない場合）
+  - チャンク分割時のタイムスタンプオフセット適用（連続性保証）
   - フォーマット検証とエラーハンドリング
-  - _Requirements: 5.1, 5.3, 5.4_
+  - _Requirements: 5.1, 5.3, 5.4, 5.5_
 
 ### Phase 3: バックエンドAPI構築
 
@@ -117,8 +133,9 @@
 - [x] 6.4 ヘルスチェックとモニタリングエンドポイント (P)
   - GET `/health`: データベース、Redis、外部API接続チェック
   - 構造化ログの実装（JSON形式、ログレベル設定）
+  - 大容量処理のログ項目追加（入力サイズ、戦略、チャンク数/サイズ、チャンク別ステータス）
   - エラートラッキング統合の準備（Sentry等）
-  - _Requirements: 8.3_
+  - _Requirements: 8.3, 10.4_
 
 - [ ] 6.5 レート制限とセキュリティの実装 (P)
   - IPベースのレート制限（10リクエスト/時間）
@@ -153,12 +170,12 @@
   - _Requirements: 3.1, 4.1_
 
 - [x] 7.4 進行状況表示とステータスフィードバックUI
-  - 進行状況インジケーターコンポーネント（音声抽出、文字起こし、LLM校正）
+  - 進行状況インジケーターコンポーネント（download/extract、preprocess、transcribe（per chunk）、merge、export、LLM校正）
   - ステータスポーリングロジック（3秒間隔）
   - 推定残り時間の表示
   - 処理ステージの可視化（pending → processing → transcribing → completed）
   - エラー時のフレンドリーなメッセージと対処法の表示
-  - _Requirements: 2.2, 3.2, 4.2, 6.2, 6.4, 7.4_
+  - _Requirements: 2.2, 3.2, 4.2, 6.2, 6.4, 7.4, 9.6_
 
 - [x] 7.5 文字起こし結果表示とコピー機能UI
   - 文字起こし結果表示エリア（テキストボックス、読み取り専用）
@@ -192,10 +209,10 @@
 - [ ] 8. ワーカータスクの統合
 - [x] 8.1 文字起こしワーカータスクの実装
   - Celeryタスク定義（transcription_taskの完全実装）
-  - AudioExtractor → TranscriptionService → データベース更新の統合
+  - AudioExtractor → AudioPreprocessor → TranscriptionService（per chunk）→ merge → Export → DB更新の統合
   - ステータス更新とエラーハンドリングの組み込み
   - タスク再試行ロジックの検証
-  - _Requirements: 2.1, 3.1, 3.4, 4.1, 4.4_
+  - _Requirements: 2.1, 3.1, 3.4, 4.1, 4.4, 9, 10_
 
 - [x] 8.2 校正ワーカータスクの実装
   - Celeryタスク定義（correction_taskの完全実装）
@@ -224,9 +241,20 @@
   - TranscriptionServiceのテスト（Whisper APIモック、日英検証）
   - CorrectionServiceのテスト（GPT APIモック、校正前後比較）
   - ExportServiceのテスト（フォーマット変換検証）
+  - AudioPreprocessorのテスト（チャンク計画、サイズ境界、オーバーラップ）
+  - タイムスタンプのオフセット適用/結合のテスト（SRT/VTT）
   - JobManagerのテスト（CRUD操作、ステータス遷移）
   - 各テストでrequirements.mdの受入基準を検証
-  - _Requirements: 1.1, 2.1, 2.3, 3.1, 3.3, 4.1, 4.3, 5.3, 5.4_
+  - _Requirements: 1.1, 2.1, 2.3, 3.1, 3.3, 4.1, 4.3, 5.3, 5.4, 9.2, 9.5, 10.5_
+
+### Phase 6: ドキュメント更新
+
+- [ ] 12. README/運用ドキュメント更新
+  - 大容量音声の扱い（圧縮/分割、24MBターゲット、安全マージン）
+  - 設定キー（MAX_UPLOAD_MB, TARGET_UPLOAD_MB, CHUNK_OVERLAP_SEC, AUDIO_BITRATE_KBPS）
+  - トラブルシューティング（ffmpeg未導入、チャンク失敗時の再実行/ログ確認）
+  - 出力仕様（TXT/SRT/VTT、タイムスタンプ連続性、重複除去の制限）
+  - _Requirements: 9, 10_
 
 - [ ]* 10.2 APIエンドポイントのユニットテスト
   - 各エンドポイントのリクエスト/レスポンス検証

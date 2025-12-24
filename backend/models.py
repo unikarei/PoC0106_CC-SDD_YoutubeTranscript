@@ -28,6 +28,10 @@ class Job(Base):
     language = Column(String(10), nullable=False)
     model = Column(String(50), nullable=False)
     status = Column(String(20), nullable=False, default="pending")
+    # More granular progress stage (keeps status enum/constraint unchanged for compatibility)
+    stage = Column(String(30), nullable=True)
+    # JSON string with stage details (e.g., chunk index/count)
+    stage_detail = Column(Text, nullable=True)
     progress = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -89,6 +93,8 @@ class Transcript(Base):
     text = Column(Text, nullable=False)
     language_detected = Column(String(10), nullable=True)
     transcription_model = Column(String(50), nullable=True)
+    # JSON string for timestamped segments (for SRT/VTT). Optional for backward compatibility.
+    segments_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

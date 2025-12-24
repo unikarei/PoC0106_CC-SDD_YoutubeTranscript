@@ -71,6 +71,17 @@
 - ローカル開発・検証の標準実行環境
 - migrate サービスで起動時にマイグレーションを適用
 
+### start_app.sh / start_worker.sh
+
+- `start_app.sh`: 開発時の標準起動スクリプト（compose 起動、Windows/WSL の Docker Desktop 未起動対策、`--with-frontend` 対応）
+- `start_worker.sh`: ローカルで Celery worker を起動する補助スクリプト（通常は compose の worker を使う）
+
+### ドキュメント（プロジェクト直下）
+
+- README.md: セットアップ/使い方/環境変数の概要
+- 起動手順.md: 起動確認・トラブルシュートの実務手順
+- 開発メモ.md: 調査観点や既知問題（例: 長時間音声の末尾欠落、エクスポート仕様）
+
 ### .kiro/
 
 - steering/: プロジェクト全体の方針

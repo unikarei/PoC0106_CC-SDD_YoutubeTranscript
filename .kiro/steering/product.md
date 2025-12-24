@@ -16,6 +16,17 @@
 - 文字起こし/校正文を基にQ&Aを任意で実行し、履歴として蓄積できる
 - エクスポート（TXT/SRT/VTT）をファイルとしてダウンロードできる
 
+## 標準の起動体験（開発時の期待値）
+
+- 起動は `./start_app.sh` を標準とする（docker compose 直叩きよりも環境差分に強い）
+- GUI も含める場合は `./start_app.sh --with-frontend` を標準とする
+  - UI: http://localhost:3000
+  - API: http://localhost:8000
+  - Docs: http://localhost:8000/docs
+
+補足:
+- Windows/WSL で Docker Desktop 未起動の場合、スクリプトは「起動を促す/可能なら自動起動して待機」する。
+
 ## 非ゴール（現時点で提供しない）
 
 - ユーザー認証・権限管理（現状は単一環境・単一テナント想定）
@@ -112,7 +123,15 @@ Jobの状態はDB制約として以下のいずれかに限定する。
   - `format` が不正なら 400
   - `status != completed` なら 400
   - 校正文があれば校正文を、なければ元の文字起こしをエクスポートに使用
+  - SRT/VTT 用の `segments` はオリジナル transcript 側（`transcripts.segments_json`）から読み込む
   - `Content-Disposition` でファイルダウンロードを返す（ASCII安全な `filename` とUTF-8の `filename*` を併用）
+
+## 既知の重要な品質課題と方針
+
+### 長時間音声で「末尾が欠落する」リスク
+
+- サイズが 25MB 未満でも、長時間音声を1リクエストで文字起こしすると末尾が途中で切れるケースがある
+- そのため、`MAX_SINGLE_CHUNK_SEC`（デフォルト 900 秒）を超える音声は分割して複数チャンクで処理する（安定性優先）
 
 ### 7) ヘルスチェック/メタ
 

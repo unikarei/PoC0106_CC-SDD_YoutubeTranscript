@@ -10,10 +10,12 @@ from dotenv import load_dotenv
 from database import SessionLocal
 from models import Job
 from services.audio_extractor import AudioExtractor
+from services.audio_preprocessor import AudioPreprocessor
 from services.transcription_service import TranscriptionService
 from services.correction_service import CorrectionService
 from services.qa_service import QaService
 from services.job_manager import JobManager
+from services.transcript_merger import merge_transcripts
 
 load_dotenv()
 
@@ -64,8 +66,8 @@ def transcription_task(self, job_id: str):
             return {"job_id": job_id, "status": "failed", "error": "Job not found"}
         
         # Update status to processing
-        job_manager.update_job_status(job_id, "processing")
-        job_manager.update_job_progress(job_id, 10)
+        job_manager.update_job_status(job_id, "processing", stage="download_extract")
+        job_manager.update_job_progress(job_id, 5)
         
         # Step 1: Extract audio from YouTube
         logger.info(f"Extracting audio for job {job_id}")
@@ -91,43 +93,108 @@ def transcription_task(self, job_id: str):
             file_size_bytes=extraction_result.file_size_bytes
         )
         
-        job_manager.update_job_progress(job_id, 40)
-        
-        # Step 2: Transcribe audio
-        logger.info(f"Transcribing audio for job {job_id}")
-        job_manager.update_job_status(job_id, "transcribing")
-        
-        transcription_service = TranscriptionService()
-        transcription_result = transcription_service.transcribe_audio(
-            audio_path=extraction_result.audio_path,
-            language=job.language,
-            model=job.model
+        job_manager.update_job_progress(job_id, 35)
+
+        # Step 2: Preprocess audio if needed (compress/split)
+        logger.info(f"Preprocessing audio for job {job_id}")
+        job_manager.update_job_status(job_id, "processing", stage="preprocess")
+
+        preprocessor = AudioPreprocessor(work_root="audio_files")
+        preprocess_result = preprocessor.prepare_for_upload(
+            audio_file_path=extraction_result.audio_path,
+            job_id=job_id,
+            model=job.model,
+            duration_seconds=extraction_result.duration_seconds,
         )
+
+        if not preprocess_result.success or not preprocess_result.plan:
+            err = preprocess_result.error or "Audio preprocess failed"
+            logger.error(f"Audio preprocess failed for job {job_id}: {err}")
+            job_manager.update_job_status(job_id, "failed", err, stage="preprocess")
+            return {"job_id": job_id, "status": "failed", "error": err}
+
+        chunks = preprocess_result.plan.chunks
+        job_manager.update_job_progress(job_id, 45)
         
-        if not transcription_result.success:
-            logger.error(f"Transcription failed for job {job_id}: {transcription_result.error}")
-            job_manager.update_job_status(job_id, "failed", transcription_result.error)
-            return {"job_id": job_id, "status": "failed", "error": transcription_result.error}
-        
-        # Save transcript
+        # Step 3: Transcribe per chunk
+        logger.info(f"Transcribing audio for job {job_id} (chunks={len(chunks)})")
+        job_manager.update_job_status(
+            job_id,
+            "transcribing",
+            stage="transcribe",
+            stage_detail={"chunk_index": 0, "chunk_count": len(chunks)},
+        )
+
+        transcription_service = TranscriptionService()
+        chunk_results = []
+        detected_language = None
+
+        for i, chunk in enumerate(chunks):
+            job_manager.update_job_status(
+                job_id,
+                "transcribing",
+                stage="transcribe",
+                stage_detail={
+                    "chunk_index": i + 1,
+                    "chunk_count": len(chunks),
+                    "chunk_size_bytes": chunk.size_bytes,
+                },
+            )
+
+            # Progress: allocate 45-90 to transcription
+            if len(chunks) > 0:
+                progress = 45 + int(((i + 1) / len(chunks)) * 45)
+                job_manager.update_job_progress(job_id, progress)
+
+            transcription_result = transcription_service.transcribe_audio(
+                audio_path=chunk.path,
+                language=job.language,
+                model=job.model,
+            )
+
+            if not transcription_result.success:
+                err = transcription_result.error or "Transcription failed"
+                detailed = f"Chunk {i + 1}/{len(chunks)} failed: {err}"
+                logger.error(f"Transcription failed for job {job_id}: {detailed}")
+                job_manager.update_job_status(job_id, "failed", detailed, stage="transcribe")
+                return {"job_id": job_id, "status": "failed", "error": detailed}
+
+            if detected_language is None and transcription_result.language_detected:
+                detected_language = transcription_result.language_detected
+
+            chunk_results.append((transcription_result.text or "", transcription_result.segments, float(chunk.start_offset_sec)))
+
+        # Step 4: Merge
+        job_manager.update_job_status(job_id, "processing", stage="merge")
+        job_manager.update_job_progress(job_id, 92)
+
+        merged = merge_transcripts(chunk_results, overlap_sec=float(preprocess_result.plan.chunk_overlap_sec))
+
+        # Step 5: Export preparation (timestamps are already continuous in merged.segments)
+        job_manager.update_job_status(job_id, "processing", stage="export")
+        job_manager.update_job_progress(job_id, 96)
+
+        # Save transcript (+ segments)
         job_manager.save_job_result(
             job_id=job_id,
-            transcript=transcription_result.text,
+            transcript=merged.text,
             metadata={
-                "language_detected": transcription_result.language_detected,
-                "model": job.model
-            }
+                "language_detected": detected_language,
+                "model": job.model,
+                "segments": merged.segments,
+            },
         )
-        
+
         job_manager.update_job_progress(job_id, 100)
-        job_manager.update_job_status(job_id, "completed")
-        
+        job_manager.update_job_status(
+            job_id,
+            "completed",
+            stage="export",
+            stage_detail={"chunk_count": len(chunks)},
+        )
+
         logger.info(f"Transcription task completed for job {job_id}")
-        return {
-            "job_id": job_id,
-            "status": "completed",
-            "transcript_length": len(transcription_result.text)
-        }
+        return {"job_id": job_id, "status": "completed", "transcript_length": len(merged.text)}
         
     except Exception as exc:
         logger.error(f"Transcription task failed for job {job_id}: {exc}", exc_info=True)

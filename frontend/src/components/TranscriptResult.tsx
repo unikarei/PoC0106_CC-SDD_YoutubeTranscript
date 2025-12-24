@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiClient } from '@/lib/api'
 
 interface TranscriptResultProps {
@@ -55,7 +55,16 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
   const [qaModel, setQaModel] = useState('gpt-4o-mini')
   const [qaQuestion, setQaQuestion] = useState('')
   const [qaHistory, setQaHistory] = useState<QaResult[]>([])
-  const [autoProofreadQueued, setAutoProofreadQueued] = useState(false)
+  const autoProofreadQueuedRef = useRef(false)
+
+  const normalizeProofreadModel = (jobModel?: string) => {
+    // Job.model is a transcription model (e.g. gpt-4o-mini-transcribe).
+    // Proofread expects chat models: gpt-4o-mini | gpt-4o.
+    if (!jobModel) return 'gpt-4o-mini'
+    if (jobModel.startsWith('gpt-4o-mini')) return 'gpt-4o-mini'
+    if (jobModel.startsWith('gpt-4o')) return 'gpt-4o'
+    return 'gpt-4o-mini'
+  }
 
   useEffect(() => {
     // Reset state on job change
@@ -64,7 +73,7 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
     setQaModel('gpt-4o-mini')
     setQaQuestion('')
     setQaHistory([])
-    setAutoProofreadQueued(false)
+    autoProofreadQueuedRef.current = false
     fetchResult()
   }, [jobId])
 
@@ -75,10 +84,10 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
       setQaHistory(data.qa_results || [])
 
       // 自動Proofread: 文字起こし完了かつ校正結果なしの場合に実行
-      if (data.transcript && !data.corrected_transcript && !autoProofreadQueued) {
-        const defaultModel = data.model || 'gpt-4o-mini'
+      if (data.transcript && !data.corrected_transcript && !autoProofreadQueuedRef.current) {
+        const defaultModel = normalizeProofreadModel(data.model)
         setProofreadModel(defaultModel)
-        setAutoProofreadQueued(true)
+        autoProofreadQueuedRef.current = true
         await triggerProofread(defaultModel, false)
       }
     } catch (err: any) {
@@ -135,13 +144,37 @@ export default function TranscriptResult({ jobId }: TranscriptResultProps) {
     }
   }
 
+  const pollForQaResult = async (previousLength: number, timeoutMs: number = 20000) => {
+    const startedAt = Date.now()
+    const currentJobId = jobId
+
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      // jobが切り替わったら中断
+      if (jobId !== currentJobId) return
+
+      try {
+        const data = await apiClient.getJobResult(currentJobId)
+        setResult(data)
+        const next = data.qa_results || []
+        setQaHistory(next)
+        if (next.length > previousLength) return
+      } catch (err) {
+        // 一時的な取得失敗は握りつぶして再試行
+        console.warn('Failed to poll QA result:', err)
+      }
+    }
+  }
+
   const triggerQa = async () => {
     if (!qaQuestion.trim()) return
     setIsQaSubmitting(true)
     try {
+      const previousLength = qaHistory.length
       await apiClient.askQuestion(jobId, qaQuestion.trim(), qaModel)
       setQaQuestion('')
-      setTimeout(fetchResult, 1500)
+      // QAは非同期なので、結果がDBに保存されるまで少しポーリング
+      await pollForQaResult(previousLength)
     } catch (err: any) {
       console.error('Failed to request QA:', err)
       alert('QAのリクエストに失敗しました')

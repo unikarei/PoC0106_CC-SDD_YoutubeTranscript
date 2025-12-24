@@ -11,11 +11,21 @@ interface JobStatusProps {
 interface StatusData {
   job_id: string
   status: string
+  stage?: string
+  stage_detail?: any
   progress: number
   error_message?: string
   youtube_url: string
   created_at: string
   updated_at: string
+}
+
+const stageMessages: Record<string, string> = {
+  download_extract: 'ダウンロード/音声抽出中...',
+  preprocess: '前処理中（圧縮/分割）...',
+  transcribe: '文字起こし中（チャンク処理）...',
+  merge: '結合中...',
+  export: '出力準備中...',
 }
 
 const statusMessages: Record<string, string> = {
@@ -87,8 +97,14 @@ export default function JobStatus({ jobId, onStatusChange }: JobStatusProps) {
     )
   }
 
-  const { status, progress, error_message } = statusData
+  const { status, stage, stage_detail, progress, error_message } = statusData
   const isProcessing = !['completed', 'failed'].includes(status)
+
+  const stageText = stage ? (stageMessages[stage] || stage) : null
+  const chunkInfo =
+    stage === 'transcribe' && stage_detail?.chunk_count
+      ? ` (${stage_detail.chunk_index || 0}/${stage_detail.chunk_count})`
+      : ''
 
   return (
     <div className="space-y-4">
@@ -107,6 +123,14 @@ export default function JobStatus({ jobId, onStatusChange }: JobStatusProps) {
           </div>
         )}
       </div>
+
+      {/* ステージ表示（互換性維持のため任意表示） */}
+      {isProcessing && stageText && (
+        <div className="text-sm text-gray-600">
+          <span className="font-medium">ステージ:</span> {stageText}
+          {chunkInfo}
+        </div>
+      )}
 
       {/* プログレスバー */}
       {isProcessing && (

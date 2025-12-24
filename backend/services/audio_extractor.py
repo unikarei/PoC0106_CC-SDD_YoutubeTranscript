@@ -72,12 +72,21 @@ class ProgressCallback:
 class AudioExtractionResult:
     """Result of audio extraction operation"""
     success: bool
-    audio_path: Optional[str]
+    file_path: Optional[str]
     duration_seconds: Optional[int]
     title: Optional[str]
     error: Optional[str]
     file_size_bytes: Optional[int] = None
     format: Optional[str] = None
+
+    @property
+    def audio_path(self) -> Optional[str]:
+        """Backward-compatible alias for older code."""
+        return self.file_path
+
+    @audio_path.setter
+    def audio_path(self, value: Optional[str]) -> None:
+        self.file_path = value
 
 
 class AudioExtractor:
@@ -167,7 +176,7 @@ class AudioExtractor:
         if not self.validate_youtube_url(youtube_url):
             return AudioExtractionResult(
                 success=False,
-                audio_path=None,
+                file_path=None,
                 duration_seconds=None,
                 title=None,
                 error="Invalid YouTube URL format"
@@ -203,7 +212,7 @@ class AudioExtractor:
                 if not info:
                     return AudioExtractionResult(
                         success=False,
-                        audio_path=None,
+                        file_path=None,
                         duration_seconds=None,
                         title=None,
                         error="Could not retrieve video information"
@@ -214,7 +223,7 @@ class AudioExtractor:
                 if duration > self.MAX_DURATION_SECONDS:
                     return AudioExtractionResult(
                         success=False,
-                        audio_path=None,
+                        file_path=None,
                         duration_seconds=duration,
                         title=info.get('title'),
                         error=f"Video duration exceeds 60 minute limit ({duration}s)"
@@ -234,7 +243,7 @@ class AudioExtractor:
                     file_size = None
                 return AudioExtractionResult(
                     success=True,
-                    audio_path=final_path,
+                    file_path=final_path,
                     duration_seconds=duration,
                     title=info.get('title'),
                     error=None,
@@ -254,7 +263,7 @@ class AudioExtractor:
             
             return AudioExtractionResult(
                 success=False,
-                audio_path=None,
+                file_path=None,
                 duration_seconds=None,
                 title=None,
                 error=error_msg
@@ -264,7 +273,7 @@ class AudioExtractor:
             logger.error(f"Unexpected error extracting audio: {e}")
             return AudioExtractionResult(
                 success=False,
-                audio_path=None,
+                file_path=None,
                 duration_seconds=None,
                 title=None,
                 error=f"Extraction failed: {str(e)}"
