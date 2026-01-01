@@ -3,13 +3,20 @@ Job management endpoints
 """
 import logging
 import json
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+import subprocess
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import or_, func
+from sqlalchemy.sql import exists
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Job
+from models import Job, AudioFile, QaResult
 from routers.schemas import (
     TranscribeJobRequest,
     TranscribeJobResponse,
@@ -21,13 +28,263 @@ from routers.schemas import (
     ProofreadResponse,
     QaRequest,
     QaResponse,
+    JobListResponse,
+    ExpandRequest,
+    ExpandResponse,
+    DeleteJobResponse,
+    BulkDeleteJobsRequest,
+    BulkDeleteJobsResponse,
 )
 from services.job_manager import JobManager
+from services.playlist_expander import (
+    expand_playlist_or_channel as expand_playlist_or_channel_service,
+    validate_youtube_url,
+)
 from worker import transcription_task, correction_task, proofread_task, qa_task
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+_DELETABLE_STATUSES = {"pending", "completed", "failed"}
+
+
+def _safe_remove_path(path: Path) -> None:
+    try:
+        if not path.exists():
+            return
+        if path.is_file() or path.is_symlink():
+            path.unlink(missing_ok=True)
+            return
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    except Exception as e:
+        logger.warning(f"Failed to remove path {path}: {e}")
+
+
+def _cleanup_job_artifacts(job: Job) -> None:
+    # audio_files is bind-mounted in docker-compose; removing here clears host files too.
+    audio_root = Path("audio_files").resolve()
+    job_id = job.id
+
+    # Chunk directory
+    _safe_remove_path(audio_root / job_id)
+
+    # Common single-file outputs
+    for ext in ("m4a", "mp3", "webm", "wav", "aac", "opus", "m4a.part", "webm.part"):
+        _safe_remove_path(audio_root / f"{job_id}.{ext}")
+
+    # DB-stored audio file path (if present)
+    try:
+        file_path = getattr(getattr(job, "audio_file", None), "file_path", None)
+        if isinstance(file_path, str) and file_path.strip():
+            p = Path(file_path.strip())
+            p = (Path.cwd() / p).resolve() if not p.is_absolute() else p.resolve()
+            if audio_root in p.parents or p == audio_root:
+                _safe_remove_path(p)
+    except Exception:
+        # best-effort cleanup only
+        return
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    """Parse ISO datetime query param, allowing trailing 'Z'."""
+    try:
+        v = value.strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        return datetime.fromisoformat(v)
+    except Exception as e:
+        raise ValueError("Invalid datetime format. Use ISO-8601 (e.g., 2025-12-25T12:34:56Z)") from e
+
+
+
+
+@router.get("/", response_model=JobListResponse)
+async def list_jobs(
+    db: Annotated[Session, Depends(get_db)],
+    q: Optional[str] = Query(default=None, description="Keyword (title/url)"),
+    tag: Optional[str] = Query(default=None, description="Single tag to match (semicolon-delimited storage)"),
+    from_ts: Optional[str] = Query(default=None, alias="from", description="ISO datetime from"),
+    to_ts: Optional[str] = Query(default=None, alias="to", description="ISO datetime to"),
+    language: Optional[str] = Query(default=None, description="Filter by language"),
+    model: Optional[str] = Query(default=None, description="Filter by model"),
+    has_qa: Optional[bool] = Query(default=None, description="Filter jobs that have QA results"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """List/search jobs for Library tab."""
+    try:
+        has_qa_expr = exists().where(QaResult.job_id == Job.id)
+
+        base_query = (
+            db.query(
+                Job,
+                AudioFile.title.label("audio_title"),
+                AudioFile.duration_seconds.label("duration_seconds"),
+                has_qa_expr.label("has_qa"),
+            )
+            .outerjoin(AudioFile, AudioFile.job_id == Job.id)
+        )
+
+        if q:
+            q_like = f"%{q.strip()}%"
+            base_query = base_query.filter(
+                or_(
+                    Job.youtube_url.ilike(q_like),
+                    Job.user_title.ilike(q_like),
+                    AudioFile.title.ilike(q_like),
+                )
+            )
+
+        if tag:
+            tag_like = f"%{tag.strip()}%"
+            base_query = base_query.filter(Job.tags.ilike(tag_like))
+
+        if from_ts:
+            base_query = base_query.filter(Job.created_at >= _parse_iso_datetime(from_ts))
+        if to_ts:
+            base_query = base_query.filter(Job.created_at <= _parse_iso_datetime(to_ts))
+
+        if language:
+            base_query = base_query.filter(Job.language == language)
+        if model:
+            base_query = base_query.filter(Job.model == model)
+
+        if has_qa is True:
+            base_query = base_query.filter(has_qa_expr)
+
+        total = (
+            base_query.with_entities(func.count(Job.id))
+            .scalar()
+        )
+
+        rows = (
+            base_query
+            .order_by(Job.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        items = []
+        for job, audio_title, duration_seconds, has_qa_value in rows:
+            title = job.user_title or audio_title
+            items.append(
+                {
+                    "job_id": job.id,
+                    "status": job.status,
+                    "youtube_url": job.youtube_url,
+                    "title": title,
+                    "user_title": getattr(job, "user_title", None),
+                    "tags": getattr(job, "tags", None),
+                    "language": job.language,
+                    "model": job.model,
+                    "duration_seconds": duration_seconds,
+                    "has_qa": bool(has_qa_value),
+                    "created_at": job.created_at,
+                    "updated_at": job.updated_at,
+                }
+            )
+
+        return {"items": items, "total": int(total or 0)}
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to list jobs: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list jobs",
+        )
+
+
+@router.post("/expand", response_model=ExpandResponse)
+async def expand_url(
+    request: ExpandRequest,
+):
+    """Expand a playlist/channel URL into individual video URLs for batch input."""
+    try:
+        url = validate_youtube_url(request.url)
+        items = expand_playlist_or_channel_service(url)
+        return {"items": items}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        message = str(e)
+        if "yt-dlp is not installed" in message:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Expansion timed out")
+    except Exception as e:
+        logger.error(f"Failed to expand URL: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to expand URL")
+
+
+@router.delete("/{job_id}", response_model=DeleteJobResponse)
+async def delete_job(
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Delete a job and its related records (and best-effort remove audio artifacts)."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    if job.status not in _DELETABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Job is in progress (status={job.status}). Try again after completion.",
+        )
+
+    _cleanup_job_artifacts(job)
+    db.delete(job)
+    db.commit()
+    return {"job_id": job_id, "deleted": True}
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteJobsResponse)
+async def bulk_delete_jobs(
+    request: BulkDeleteJobsRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Bulk delete jobs. Returns per-job results; skips in-progress jobs."""
+    results = []
+    deleted_count = 0
+
+    # De-duplicate while preserving order
+    seen = set()
+    job_ids = []
+    for jid in request.job_ids:
+        if jid in seen:
+            continue
+        seen.add(jid)
+        job_ids.append(jid)
+
+    for jid in job_ids:
+        job = db.query(Job).filter(Job.id == jid).first()
+        if not job:
+            results.append({"job_id": jid, "deleted": False, "reason": "not_found"})
+            continue
+
+        if job.status not in _DELETABLE_STATUSES:
+            results.append({"job_id": jid, "deleted": False, "reason": f"in_progress:{job.status}"})
+            continue
+
+        try:
+            _cleanup_job_artifacts(job)
+            db.delete(job)
+            db.commit()
+            deleted_count += 1
+            results.append({"job_id": jid, "deleted": True, "reason": None})
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to delete job {jid}: {e}", exc_info=True)
+            results.append({"job_id": jid, "deleted": False, "reason": "db_error"})
+
+    return {"deleted_count": deleted_count, "results": results}
 
 
 @router.post("/transcribe", response_model=TranscribeJobResponse, status_code=status.HTTP_201_CREATED)
@@ -50,6 +307,8 @@ async def create_transcription_job(
         job_manager = JobManager(db)
         job = job_manager.create_job(
             youtube_url=request.youtube_url,
+            user_title=request.user_title,
+            tags=request.tags,
             language=request.language,
             model=request.model
         )
@@ -118,6 +377,8 @@ async def get_job_status(
             stage_detail=stage_detail,
             progress=job.progress,
             youtube_url=job.youtube_url,
+            user_title=getattr(job, "user_title", None),
+            tags=getattr(job, "tags", None),
             language=job.language,
             model=job.model,
             error_message=job.error_message,

@@ -11,6 +11,8 @@ class TranscribeJobRequest(BaseModel):
     Request schema for creating a new transcription job
     """
     youtube_url: str = Field(..., description="YouTube video URL")
+    user_title: Optional[str] = Field(default=None, description="Optional user-provided title")
+    tags: Optional[str] = Field(default=None, description="Optional semicolon-delimited tags (e.g., 'tag1;tag2')")
     language: str = Field(..., description="Target language (ja or en)")
     model: str = Field(default="gpt-4o-mini-transcribe", description="Transcription model")
     
@@ -61,6 +63,8 @@ class JobStatusResponse(BaseModel):
     stage_detail: Optional[Dict[str, Any]] = Field(default=None, description="Structured stage details (e.g., chunk index/count)")
     progress: int
     youtube_url: str
+    user_title: Optional[str] = None
+    tags: Optional[str] = None
     language: str
     model: str
     error_message: Optional[str] = None
@@ -212,3 +216,258 @@ class HealthResponse(BaseModel):
     database: str
     redis: str
     timestamp: datetime
+
+
+class JobListItem(BaseModel):
+    job_id: str
+    status: str
+    youtube_url: str
+    title: Optional[str] = None
+    user_title: Optional[str] = None
+    tags: Optional[str] = None
+    language: str
+    model: str
+    duration_seconds: Optional[int] = None
+    has_qa: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobListResponse(BaseModel):
+    items: List[JobListItem]
+    total: int
+
+
+class ExpandRequest(BaseModel):
+    url: str = Field(..., description="Playlist or channel URL")
+
+
+class ExpandItem(BaseModel):
+    youtube_url: str
+    title: Optional[str] = None
+
+
+class ExpandResponse(BaseModel):
+    items: List[ExpandItem]
+
+
+class DeleteJobResponse(BaseModel):
+    job_id: str
+    deleted: bool
+
+
+class BulkDeleteJobsRequest(BaseModel):
+    job_ids: List[str] = Field(..., min_length=1, description="Job IDs to delete")
+
+
+class BulkDeleteJobsItemResult(BaseModel):
+    job_id: str
+    deleted: bool
+    reason: Optional[str] = None
+
+
+class BulkDeleteJobsResponse(BaseModel):
+    deleted_count: int
+    results: List[BulkDeleteJobsItemResult]
+
+
+# ============================================================================
+# Folder Tree Schemas (New)
+# ============================================================================
+
+class FolderSettings(BaseModel):
+    """Folder default settings"""
+    default_language: Optional[str] = None
+    default_model: Optional[str] = None
+    default_prompt: Optional[str] = None
+    default_qa_enabled: Optional[bool] = False
+    default_output_format: Optional[str] = 'txt'
+    naming_template: Optional[str] = None
+
+
+class FolderBase(BaseModel):
+    """Base folder schema"""
+    name: str = Field(..., min_length=1, max_length=255)
+    parent_id: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class FolderCreate(FolderBase):
+    """Schema for creating a folder"""
+    default_language: Optional[str] = None
+    default_model: Optional[str] = None
+    default_prompt: Optional[str] = None
+    default_qa_enabled: Optional[bool] = False
+    default_output_format: Optional[str] = 'txt'
+    naming_template: Optional[str] = None
+
+
+class FolderUpdate(BaseModel):
+    """Schema for updating a folder"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class FolderItemCount(BaseModel):
+    """Item count by status"""
+    queued: int = 0
+    running: int = 0
+    completed: int = 0
+    failed: int = 0
+
+
+class FolderResponse(FolderBase):
+    """Schema for folder response"""
+    id: str
+    path: str
+    default_language: Optional[str] = None
+    default_model: Optional[str] = None
+    default_prompt: Optional[str] = None
+    default_qa_enabled: Optional[bool] = False
+    default_output_format: Optional[str] = 'txt'
+    naming_template: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    item_count: Optional[FolderItemCount] = None
+    children: Optional[List['FolderResponse']] = []
+
+    class Config:
+        from_attributes = True
+
+
+# For recursive type
+FolderResponse.model_rebuild()
+
+
+class FolderTreeResponse(BaseModel):
+    """Schema for folder tree response"""
+    folders: List[FolderResponse]
+
+
+class FolderSettingsResponse(FolderSettings):
+    """Schema for folder settings response"""
+    folder_id: str
+    folder_name: str
+    
+    class Config:
+        from_attributes = True
+
+
+# =============================================================================
+# Item Schemas
+# =============================================================================
+
+class ItemBase(BaseModel):
+    """Base schema for Item"""
+    title: Optional[str] = None
+    youtube_url: Optional[str] = None
+
+
+class ItemCreate(ItemBase):
+    """Schema for creating an item"""
+    folder_id: str
+    job_id: str
+
+
+class ItemUpdate(BaseModel):
+    """Schema for updating an item"""
+    title: Optional[str] = None
+    folder_id: Optional[str] = None
+
+
+class ItemMoveRequest(BaseModel):
+    """Schema for moving an item to another folder"""
+    target_folder_id: str
+
+
+class TagInfo(BaseModel):
+    """Schema for tag information"""
+    id: str
+    name: str
+    color: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class ItemResponse(BaseModel):
+    """Schema for item response"""
+    id: str
+    folder_id: str
+    job_id: str
+    title: Optional[str] = None
+    youtube_url: Optional[str] = None
+    status: str
+    progress: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    cost_usd: Optional[float] = None
+    tags: List[TagInfo] = []
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class ItemListResponse(BaseModel):
+    """Schema for item list response"""
+    items: List[ItemResponse]
+    total: int
+
+
+# Tag Schemas
+class TagCreate(BaseModel):
+    """Schema for creating a tag"""
+    name: str = Field(..., max_length=100)
+    color: Optional[str] = Field(None, max_length=20)
+
+
+class TagResponse(BaseModel):
+    """Schema for tag response"""
+    id: str
+    name: str
+    color: Optional[str] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class TagListResponse(BaseModel):
+    """Schema for tag list response"""
+    tags: List[TagResponse]
+
+
+# Bulk Operation Schemas
+class BulkMoveRequest(BaseModel):
+    """Schema for bulk move operation"""
+    item_ids: List[str] = Field(..., min_items=1)
+    target_folder_id: str
+
+
+class BulkTagRequest(BaseModel):
+    """Schema for bulk tag operation"""
+    item_ids: List[str] = Field(..., min_items=1)
+    tag_name: str
+
+
+class BulkDeleteRequest(BaseModel):
+    """Schema for bulk delete operation"""
+    item_ids: List[str] = Field(..., min_items=1)
+
+
+class BulkOperationResult(BaseModel):
+    """Schema for bulk operation result"""
+    success_count: int
+    failed_count: int
+    failed_items: List[Dict[str, str]] = []  # [{"item_id": "...", "error": "..."}]
+
+
+class ItemTagRequest(BaseModel):
+    """Schema for adding a tag to an item"""
+    tag_name: str
+

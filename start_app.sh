@@ -198,9 +198,6 @@ if [[ $BUILD -eq 1 ]]; then                      # build指定なら
 fi
 
 SERVICES=(postgres redis migrate api worker)     # 起動するサービス一覧（compose.yml 側の定義名）
-if [[ $WITH_FRONTEND -eq 1 ]]; then              # フロントも起動するなら
-  SERVICES+=(frontend)                           # frontend を追加
-fi
 
 # ------------------------------------------------------------
 # 起動処理（compose up → 状態確認 → 必要ならログ追従）
@@ -215,15 +212,49 @@ echo "- API:  http://localhost:8000"           # API URL
 echo "- Docs: http://localhost:8000/docs"      # Swagger URL
 echo                                            # 1行空ける
 
-if [[ $DETACH -eq 1 && $FOLLOW_LOGS -eq 1 ]]; then  # detach起動かつ logs 指定なら
-  if [[ $WITH_FRONTEND -eq 1 ]]; then              # frontend も含む場合
-    "${DC[@]}" logs -f api worker frontend        # api/worker/frontend のログを追従
-  else                                             # backendのみの場合
-    "${DC[@]}" logs -f api worker                 # api/worker のログを追従
+# ------------------------------------------------------------
+# フロントエンド起動 (--with-frontend 指定時)
+# - frontend/ ディレクトリで npm run dev をバックグラウンド実行
+# ------------------------------------------------------------
+FRONTEND_PID_FILE=".frontend.pid"              # フロントエンドPIDファイル
+
+if [[ $WITH_FRONTEND -eq 1 ]]; then              # フロント起動指定あり
+  echo "Starting Next.js frontend..."
+  
+  # node_modules がなければ npm install を実行
+  if [[ ! -d "frontend/node_modules" ]]; then
+    echo "Installing frontend dependencies..."
+    (cd frontend && npm install)
   fi
+  
+  # 既存のフロントエンドプロセスを停止
+  if [[ -f "$FRONTEND_PID_FILE" ]]; then
+    OLD_PID=$(cat "$FRONTEND_PID_FILE")
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+      echo "Stopping previous frontend process (PID: $OLD_PID)..."
+      kill "$OLD_PID" 2>/dev/null || true
+      sleep 1
+    fi
+    rm -f "$FRONTEND_PID_FILE"
+  fi
+  
+  # フロントエンドをバックグラウンドで起動
+  (cd frontend && npm run dev > ../frontend.log 2>&1 &)
+  FRONTEND_PID=$!
+  echo $FRONTEND_PID > "$FRONTEND_PID_FILE"
+  
+  echo "Frontend started (PID: $FRONTEND_PID)"
+  echo "- UI:   http://localhost:3000"
+  echo "- Logs: tail -f frontend.log"
+  echo
+  
+  # フロントエンドの起動を少し待つ
+  sleep 3
+  
+  # ブラウザを開く
+  open_url "http://localhost:3000"
 fi
 
-if [[ $WITH_FRONTEND -eq 1 ]]; then              # フロント起動時はUI URLも案内
-  echo "- UI:   http://localhost:3000"          # UI URL
-  open_url "http://localhost:3000"
+if [[ $DETACH -eq 1 && $FOLLOW_LOGS -eq 1 ]]; then  # detach起動かつ logs 指定なら
+  "${DC[@]}" logs -f api worker                 # api/worker のログを追従
 fi

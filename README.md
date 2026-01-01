@@ -10,6 +10,37 @@ YouTube動画の音声を抽出し、日本語・英語の文字起こしとLLM�
 - 複数形式でのエクスポート（TXT、SRT、VTT）
 - 非同期処理による高速な処理
 - レスポンシブなWebUI
+- **バッチ処理**: URLリスト、CSV、プレイリスト/チャンネル展開による一括処理
+- **フォルダツリーライブラリ**: 階層フォルダで動画を整理、タグ付け、一括操作
+- **検索・フィルタ**: キーワード、タグ、ステータス、期間での絞り込み
+- **Q&A機能**: 文字起こし結果に対する質問応答（LLM活用）
+
+## Folder Tree Library (New!)
+
+動画をフォルダで階層的に管理し、効率的に整理・検索できます：
+
+### 主な機能
+- **階層フォルダ管理**: フォルダツリーで動画を分類・整理
+- **タグ機能**: 横断的な整理と検索
+- **一括操作**: 複数動画の移動、タグ付け、削除
+- **検索・フィルタ**: キーワード、タグ、ステータスで絞り込み
+- **フォルダ既定値**: フォルダごとに言語・モデルを設定
+- **ステータス集計**: フォルダごとに進行状況を可視化
+
+### データ移行
+
+既存の動画データをフォルダ構造に移行するには：
+
+```bash
+# Dry run (実際には変更しない)
+python scripts/migrate_jobs_to_items.py --dry-run
+
+# 実際に移行
+python scripts/migrate_jobs_to_items.py
+```
+
+すべての既存動画は「Inbox」フォルダに配置されます。その後、必要に応じてフォルダを作成して整理できます。
+
 
 ## Architecture
 
@@ -50,6 +81,34 @@ OPENAI_API_KEY=your_actual_api_key_here
 
 ### 3. Start Services
 
+**Option 1: Backend + Frontend (Recommended)**
+
+```bash
+chmod +x start_app.sh
+./start_app.sh --with-frontend
+```
+
+This will:
+- Start all backend services (postgres, redis, api, worker)
+- Install frontend dependencies if needed
+- Start Next.js dev server in background
+- Automatically open http://localhost:3000 in your browser
+
+**Option 2: Backend only**
+
+```bash
+./start_app.sh
+```
+
+Then start frontend manually in another terminal:
+```bash
+cd frontend
+npm install  # First time only
+npm run dev
+```
+
+**Legacy method:**
+
 ```bash
 docker compose up -d
 ```
@@ -60,20 +119,21 @@ If your environment still uses the legacy `docker-compose` command, you can run:
 docker-compose up -d
 ```
 
-Or use the helper script:
+### 4. Stop Services
 
+**Stop all (backend + frontend):**
 ```bash
-chmod +x start_app.sh
-./start_app.sh
+./stop_app.sh --all
 ```
 
-To start the UI as well:
-
+**Stop backend only:**
 ```bash
-./start_app.sh --with-frontend
+./stop_app.sh
+# or
+docker compose down
 ```
 
-### 4. Verify Services
+### 5. Verify Services
 
 ```bash
 docker compose ps
@@ -81,13 +141,9 @@ docker compose ps
 
 All services (postgres, redis, api, worker) should be running.
 
-### 5. Setup Frontend (Optional)
-
+If you used `--with-frontend`, check the frontend log:
 ```bash
-cd frontend
-npm install
-cp .env.local.example .env.local
-npm run dev
+tail -f frontend.log
 ```
 
 ### 6. Access Application

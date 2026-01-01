@@ -9,7 +9,7 @@ from datetime import datetime
 import json
 
 from database import SessionLocal
-from models import Job, AudioFile, Transcript, CorrectedTranscript, QaResult
+from models import Job, AudioFile, Transcript, CorrectedTranscript, QaResult, Item, Folder
 
 logger = logging.getLogger(__name__)
 
@@ -40,34 +40,75 @@ class JobManager:
         if self._owns_session and db:
             db.close()
     
-    def create_job(self, youtube_url: str, language: str, model: str) -> Job:
+    def create_job(
+        self,
+        youtube_url: str,
+        language: str,
+        model: str,
+        user_title: Optional[str] = None,
+        tags: Optional[str] = None,
+    ) -> Job:
         """
-        Create a new transcription job
+        Create a new transcription job and corresponding Item in Inbox folder
         
         Args:
             youtube_url: YouTube video URL
             language: Target language (ja or en)
             model: Whisper model to use
+            user_title: Optional user-provided title
+            tags: Optional semicolon-delimited tags
             
         Returns:
             Job: Created job object
         """
         db = self._get_db()
         try:
+            # Create Job
             job = Job(
                 youtube_url=youtube_url,
+                user_title=user_title,
+                tags=tags,
                 language=language,
                 model=model,
                 status="pending",
-                progress=0
+                progress=0,
             )
             db.add(job)
+            db.flush()  # Get job.id without committing
+            
+            # Get or create Inbox folder
+            inbox_folder = db.query(Folder).filter(Folder.name == 'Inbox').first()
+            if not inbox_folder:
+                inbox_folder = Folder(
+                    name='Inbox',
+                    path='/Inbox',
+                    icon='📥',
+                    description='Default folder for new items'
+                )
+                db.add(inbox_folder)
+                db.flush()
+            
+            # Create Item in Inbox folder
+            item = Item(
+                folder_id=inbox_folder.id,
+                job_id=job.id,
+                title=user_title,
+                youtube_url=youtube_url,
+                status='queued',
+                progress=0,
+            )
+            db.add(item)
+            
             db.commit()
             db.refresh(job)
             
-            logger.info(f"Created job {job.id} for {youtube_url}")
+            logger.info(f"Created job {job.id} and item in Inbox for {youtube_url}")
             return job
             
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to create job and item: {e}", exc_info=True)
+            raise
         finally:
             self._close_db(db)
     
@@ -97,7 +138,7 @@ class JobManager:
         stage_detail: Optional[Dict[str, Any]] = None,
     ):
         """
-        Update job status
+        Update job status and sync with corresponding Item
         
         Args:
             job_id: Job identifier
@@ -121,6 +162,23 @@ class JobManager:
                     job.stage_detail = json.dumps(stage_detail, ensure_ascii=False)
 
                 job.updated_at = datetime.utcnow()
+                
+                # Sync Item status
+                item = db.query(Item).filter(Item.job_id == job_id).first()
+                if item:
+                    # Map job status to item status
+                    status_map = {
+                        'pending': 'queued',
+                        'processing': 'running',
+                        'transcribing': 'running',
+                        'completed': 'completed',
+                        'failed': 'failed',
+                    }
+                    item.status = status_map.get(status, 'running')
+                    if error_message:
+                        item.error_message = error_message
+                    item.updated_at = datetime.utcnow()
+                
                 db.commit()
                 
                 logger.info(f"Updated job {job_id} status to {status}")
@@ -132,7 +190,7 @@ class JobManager:
     
     def update_job_progress(self, job_id: str, progress: int, message: Optional[str] = None):
         """
-        Update job progress
+        Update job progress and sync with Item
         
         Args:
             job_id: Job identifier
@@ -145,6 +203,13 @@ class JobManager:
             if job:
                 job.progress = progress
                 job.updated_at = datetime.utcnow()
+                
+                # Sync Item progress
+                item = db.query(Item).filter(Item.job_id == job_id).first()
+                if item:
+                    item.progress = progress
+                    item.updated_at = datetime.utcnow()
+                
                 db.commit()
                 
                 logger.debug(f"Updated job {job_id} progress to {progress}%")
@@ -194,7 +259,7 @@ class JobManager:
         file_size_bytes: Optional[int] = None
     ) -> str:
         """
-        Create audio file record
+        Create audio file record and update corresponding Item with title and duration
         
         Args:
             job_id: Job identifier
@@ -218,10 +283,21 @@ class JobManager:
                 file_size_bytes=file_size_bytes
             )
             db.add(audio_file)
+            
+            # Update corresponding Item with title and duration
+            item = db.query(Item).filter(Item.job_id == job_id).first()
+            if item:
+                if not item.title or item.title == '':
+                    item.title = title
+                item.duration_seconds = duration_seconds
+                if file_size_bytes:
+                    item.file_size_bytes = file_size_bytes
+                item.updated_at = datetime.utcnow()
+            
             db.commit()
             db.refresh(audio_file)
             
-            logger.info(f"Created audio file record {audio_file.id} for job {job_id}")
+            logger.info(f"Created audio file record {audio_file.id} for job {job_id}, updated Item title")
             return audio_file.id
             
         finally:
