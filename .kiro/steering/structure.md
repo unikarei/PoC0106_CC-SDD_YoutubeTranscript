@@ -71,9 +71,11 @@
 - ローカル開発・検証の標準実行環境
 - migrate サービスで起動時にマイグレーションを適用
 
-### start_app.sh / start_worker.sh
+### start_app.sh / startup.sh / run02_app.sh
 
-- `start_app.sh`: 開発時の標準起動スクリプト（compose 起動、Windows/WSL の Docker Desktop 未起動対策、`--with-frontend` 対応）
+- `startup.sh`: 開発時の標準起動スクリプト（compose 起動、Windows/WSL の Docker Desktop 未起動対策、`--with-frontend` / `--frontend-local` 対応）
+- `run02_app.sh`: startup.sh を呼び出すラッパー（既定は `--frontend-local`）
+- `start_app.sh`: compose 起動の補助スクリプト（startup.shから呼び出される）
 - `start_worker.sh`: ローカルで Celery worker を起動する補助スクリプト（通常は compose の worker を使う）
 
 ### ドキュメント（プロジェクト直下）

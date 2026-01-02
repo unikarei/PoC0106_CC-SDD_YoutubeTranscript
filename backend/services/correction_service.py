@@ -58,8 +58,19 @@ class CorrectionService:
         self.api_key = api_key or os.getenv('OPENAI_API_KEY')
         if not self.api_key:
             logger.warning("OpenAI API key not provided")
-        
-        self.client = OpenAI(api_key=self.api_key) if self.api_key else None
+            self.client = None
+        else:
+            try:
+                # Initialize with timeout settings
+                self.client = OpenAI(
+                    api_key=self.api_key,
+                    timeout=120.0,  # 2 minutes timeout
+                    max_retries=3   # Retry up to 3 times
+                )
+                logger.info("OpenAI client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
+                self.client = None
     
     def _generate_correction_prompt(self, language: str) -> str:
         """
@@ -193,10 +204,10 @@ Return only the corrected text without explanations."""
         """
         if not self.client:
             logger.error("OpenAI client not initialized")
-            return {
-                'success': False,
-                'error': "OpenAI API key not configured"
-            }
+            return CorrectionResult(
+                success=False,
+                error="OpenAI API key not configured"
+            )
         
         try:
             # Generate correction prompt
@@ -207,39 +218,53 @@ Return only the corrected text without explanations."""
             
             if len(chunks) == 1:
                 # Single request
-                logger.info(f"Correcting text with {model}")
+                logger.info(f"Correcting text with {model} (length: {len(transcript_text)} chars)")
                 
-                response = self.client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": transcript_text}
-                    ],
-                    temperature=0.3  # Lower temperature for more consistent corrections
-                )
-                
-                corrected_text = response.choices[0].message.content
-                
-            else:
-                # Multiple requests for long text
-                logger.info(f"Correcting long text in {len(chunks)} chunks")
-                
-                corrected_chunks = []
-                for i, chunk in enumerate(chunks):
-                    logger.debug(f"Correcting chunk {i+1}/{len(chunks)}")
-                    
+                try:
                     response = self.client.chat.completions.create(
                         model=model,
                         messages=[
                             {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": chunk}
+                            {"role": "user", "content": transcript_text}
                         ],
-                        temperature=0.3
+                        temperature=0.3  # Lower temperature for more consistent corrections
                     )
                     
-                    corrected_chunks.append(response.choices[0].message.content)
+                    corrected_text = response.choices[0].message.content
+                    logger.info(f"Correction API call successful (output: {len(corrected_text)} chars)")
+                    
+                except Exception as api_error:
+                    logger.error(f"OpenAI API call failed: {api_error}", exc_info=True)
+                    raise
+                
+            else:
+                # Multiple requests for long text
+                logger.info(f"Correcting long text in {len(chunks)} chunks (total: {len(transcript_text)} chars)")
+                
+                corrected_chunks = []
+                for i, chunk in enumerate(chunks):
+                    logger.info(f"Correcting chunk {i+1}/{len(chunks)} (length: {len(chunk)} chars)")
+                    
+                    try:
+                        response = self.client.chat.completions.create(
+                            model=model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
+                            temperature=0.3
+                        )
+                        
+                        chunk_result = response.choices[0].message.content
+                        corrected_chunks.append(chunk_result)
+                        logger.info(f"Chunk {i+1}/{len(chunks)} completed (output: {len(chunk_result)} chars)")
+                        
+                    except Exception as api_error:
+                        logger.error(f"OpenAI API call failed for chunk {i+1}: {api_error}", exc_info=True)
+                        raise
                 
                 corrected_text = '\n\n'.join(corrected_chunks)
+                logger.info(f"All chunks corrected (total output: {len(corrected_text)} chars)")
             
             # Calculate changes summary
             changes_summary = self._calculate_changes_summary(transcript_text, corrected_text)
@@ -256,10 +281,22 @@ Return only the corrected text without explanations."""
             return result
             
         except Exception as e:
-            logger.error(f"Correction error: {e}")
+            error_msg = str(e)
+            logger.error(f"Correction error: {e}", exc_info=True)
+            
+            # Provide more specific error messages
+            if "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+                error_detail = f"OpenAI API connection failed: {error_msg}"
+            elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+                error_detail = f"OpenAI API authentication failed: {error_msg}"
+            elif "rate_limit" in error_msg.lower():
+                error_detail = f"OpenAI API rate limit exceeded: {error_msg}"
+            else:
+                error_detail = f"Correction failed: {error_msg}"
+                
             return CorrectionResult(
                 success=False,
-                error=f"Correction failed: {str(e)}"
+                error=error_detail
             )
 
     def correct_transcript(self, transcript: str, language: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:

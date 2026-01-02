@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +97,9 @@ class AudioExtractor:
     Service for extracting audio from YouTube videos
     """
     
-    # Maximum video duration in seconds (60 minutes)
-    MAX_DURATION_SECONDS = 3600
+    # Maximum video duration in seconds (0 = no limit)
+    # Can be overridden by MAX_VIDEO_DURATION_SECONDS environment variable
+    MAX_DURATION_SECONDS = int(os.getenv('MAX_VIDEO_DURATION_SECONDS', '0'))
     
     # YouTube URL patterns
     YOUTUBE_PATTERNS = [
@@ -218,15 +222,16 @@ class AudioExtractor:
                         error="Could not retrieve video information"
                     )
                 
-                # Check duration
+                # Check duration (only if MAX_DURATION_SECONDS > 0)
                 duration = info.get('duration', 0)
-                if duration > self.MAX_DURATION_SECONDS:
+                if self.MAX_DURATION_SECONDS > 0 and duration > self.MAX_DURATION_SECONDS:
+                    limit_minutes = self.MAX_DURATION_SECONDS // 60
                     return AudioExtractionResult(
                         success=False,
                         file_path=None,
                         duration_seconds=duration,
                         title=info.get('title'),
-                        error=f"Video duration exceeds 60 minute limit ({duration}s)"
+                        error=f"Video duration exceeds {limit_minutes} minute limit ({duration}s)"
                     )
                 
                 # Download audio

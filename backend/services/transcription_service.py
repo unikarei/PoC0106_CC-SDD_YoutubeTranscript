@@ -49,8 +49,19 @@ class TranscriptionService:
         self.api_key = api_key or os.getenv('OPENAI_API_KEY')
         if not self.api_key:
             logger.warning("OpenAI API key not provided")
-        
-        self.client = OpenAI(api_key=self.api_key) if self.api_key else None
+            self.client = None
+        else:
+            try:
+                # Initialize with timeout settings
+                self.client = OpenAI(
+                    api_key=self.api_key,
+                    timeout=120.0,  # 2 minutes timeout
+                    max_retries=3   # Retry up to 3 times
+                )
+                logger.info("OpenAI client initialized successfully for transcription")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
+                self.client = None
     
     def transcribe(
         self,

@@ -28,13 +28,27 @@ class QaService:
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             logger.warning("OpenAI API key not provided")
-        self.client = OpenAI(api_key=self.api_key) if self.api_key else None
+            self.client = None
+        else:
+            try:
+                # Initialize with timeout settings
+                self.client = OpenAI(
+                    api_key=self.api_key,
+                    timeout=120.0,  # 2 minutes timeout
+                    max_retries=3   # Retry up to 3 times
+                )
+                logger.info("OpenAI client initialized successfully for QA")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
+                self.client = None
 
     def answer_question(self, transcript_text: str, question: str, model: str = DEFAULT_MODEL) -> QaAnswerResult:
         if not self.client:
             return QaAnswerResult(success=False, error="OpenAI API key not configured")
 
         try:
+            logger.info(f"Processing QA with model {model}, transcript length: {len(transcript_text)}, question: {question[:50]}...")
+            
             system_prompt = (
                 "You are a helpful assistant for answering questions based on a transcript. "
                 "Use the provided transcript strictly. If the answer is not in the transcript, say you cannot find it." 
@@ -51,7 +65,8 @@ class QaService:
             )
 
             answer = response.choices[0].message.content
+            logger.info(f"QA completed successfully, answer length: {len(answer)}")
             return QaAnswerResult(success=True, answer=answer, model=model)
         except Exception as exc:
-            logger.error(f"QA generation failed: {exc}")
+            logger.error(f"QA generation failed: {exc}", exc_info=True)
             return QaAnswerResult(success=False, error=str(exc))

@@ -69,8 +69,10 @@
 ## OpenAI API
 
 - OPENAI_API_KEY は必須（未設定時は各サービスが失敗を返す）
+- 全サービスでタイムアウト（120秒）とリトライ（最大3回）を設定
 - 文字起こし: backend/services/transcription_service.py
 	- 音声ファイルの25MB上限チェックがある
+	- 超過時は自動圧縮/分割
 - 校正: backend/services/correction_service.py
 	- 言語別プロンプトを内包
 	- 長文は分割して複数リクエストする設計
@@ -94,6 +96,7 @@
 
 音声の圧縮/分割・安定性（大容量/長時間対策）:
 
+- MAX_VIDEO_DURATION_SECONDS: 動画時間制限（秒、デフォルト 0=無制限）
 - MAX_UPLOAD_MB: 入力ファイルの防御的な上限（デフォルト 25MB）
 - TARGET_UPLOAD_MB: 圧縮/分割後に目指す上限（デフォルト 24MB）
 - AUDIO_BITRATE_KBPS: 圧縮時の音声ビットレート（デフォルト 48kbps）
@@ -102,12 +105,13 @@
 
 ## 起動・実行（開発の標準手順）
 
-- 標準起動: `./start_app.sh`
-- GUI も含める: `./start_app.sh --with-frontend`
+- 標準起動: `./startup.sh` または `./run02_app.sh`
+- GUI も含める（Docker版）: `./startup.sh --with-frontend`
+- GUI も含める（ローカルNode.js版、開発推奨）: `./startup.sh --frontend-local`
 
 Windows/WSL の注意:
 
-- Docker Desktop 未起動時、`start_app.sh`/`start_worker.sh` は `docker info` を基準に検知し、可能なら Docker Desktop を自動起動して待機する。
+- Docker Desktop 未起動時、`startup.sh` は `docker info` を基準に検知し、PowerShell経由で Docker Desktop を自動起動して最大2分待機する。
 
 ## エクスポートの仕様（実装上の事実）
 
