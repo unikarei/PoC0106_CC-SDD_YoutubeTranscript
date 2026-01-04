@@ -218,6 +218,45 @@ class JobManager:
                 
         finally:
             self._close_db(db)
+
+    def update_job_title(self, job_id: str, title: str) -> bool:
+        """
+        Update job title (user_title) and sync with Item
+        
+        Args:
+            job_id: Job identifier
+            title: New title
+            
+        Returns:
+            True if successful, False if job not found
+        """
+        db = self._get_db()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                logger.warning(f"Job {job_id} not found for title update")
+                return False
+            
+            job.user_title = title
+            job.updated_at = datetime.utcnow()
+            
+            # Sync Item title
+            item = db.query(Item).filter(Item.job_id == job_id).first()
+            if item:
+                item.title = title
+                item.updated_at = datetime.utcnow()
+            
+            db.commit()
+            
+            logger.info(f"Updated job {job_id} title to: {title[:50]}...")
+            return True
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to update job title: {e}", exc_info=True)
+            return False
+        finally:
+            self._close_db(db)
     
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """

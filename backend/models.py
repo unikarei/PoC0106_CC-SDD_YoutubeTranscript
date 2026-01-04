@@ -46,6 +46,7 @@ class Job(Base):
     transcript = relationship("Transcript", back_populates="job", uselist=False, cascade="all, delete-orphan")
     corrected_transcript = relationship("CorrectedTranscript", back_populates="job", uselist=False, cascade="all, delete-orphan")
     qa_results = relationship("QaResult", back_populates="job", cascade="all, delete-orphan")
+    note = relationship("JobNote", back_populates="job", uselist=False, cascade="all, delete-orphan")
 
     # Constraints
     __table_args__ = (
@@ -153,6 +154,27 @@ class QaResult(Base):
     # Indexes
     __table_args__ = (
         Index("ix_qa_results_job_id", "job_id"),
+    )
+
+
+class JobNote(Base):
+    """
+    JobNote model represents a text note associated with a job
+    """
+    __tablename__ = "job_notes"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), unique=True, nullable=False)
+    content = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    job = relationship("Job", back_populates="note")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_job_notes_job_id", "job_id"),
     )
 
 

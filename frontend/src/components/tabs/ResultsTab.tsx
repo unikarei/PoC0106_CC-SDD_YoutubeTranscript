@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { apiClient } from '@/lib/api'
 import { AppSettings } from '@/lib/settings'
+import { InlineEditTitle } from '../InlineEditTitle'
 
 type Props = {
   jobId: string | null
@@ -53,7 +54,7 @@ type JobResult = {
   error_message?: string
 }
 
-type SubTab = 'transcript' | 'proofread' | 'qa'
+type SubTab = 'transcript' | 'proofread' | 'qa' | 'note'
 
 function downloadText(filename: string, text: string) {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
@@ -92,6 +93,11 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
   const [isProofreading, setIsProofreading] = useState(false)
   const [proofreadModel, setProofreadModel] = useState(settings.proofreadModel)
 
+  const [noteContent, setNoteContent] = useState('')
+  const [originalNote, setOriginalNote] = useState('')
+  const [isNoteSaving, setIsNoteSaving] = useState(false)
+  const [noteLastSaved, setNoteLastSaved] = useState<string | null>(null)
+
   const [reRunModel, setReRunModel] = useState(settings.transcriptionModel)
 
   useEffect(() => {
@@ -105,9 +111,16 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
     setIsLoading(true)
     setError(null)
     try {
-      const [s, r] = await Promise.all([apiClient.getJobStatus(jobId), apiClient.getJobResult(jobId)])
+      const [s, r, n] = await Promise.all([
+        apiClient.getJobStatus(jobId),
+        apiClient.getJobResult(jobId),
+        apiClient.getNote(jobId).catch(() => ({ content: null, updated_at: null }))
+      ])
       setStatus(s)
       setResult(r)
+      setNoteContent(n.content || '')
+      setOriginalNote(n.content || '')
+      setNoteLastSaved(n.updated_at || null)
     } catch (err: any) {
       setError(err?.response?.data?.detail || '結果の取得に失敗しました')
       setStatus(null)
@@ -149,6 +162,9 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
   useEffect(() => {
     setActive('transcript')
     setQaQuestion('')
+    setNoteContent('')
+    setOriginalNote('')
+    setNoteLastSaved(null)
     fetchAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId])
@@ -158,6 +174,18 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
     const audioTitle = result?.audio_file?.title
     return userTitle || audioTitle || '—'
   }, [status?.user_title, result?.audio_file?.title])
+
+  // タイトル更新ハンドラー
+  const handleTitleUpdate = useCallback(async (newTitle: string) => {
+    if (!jobId) return
+    try {
+      await apiClient.updateJobTitle(jobId, newTitle)
+      // ローカルstateを更新
+      setStatus((prev) => prev ? { ...prev, user_title: newTitle } : prev)
+    } catch (err: any) {
+      throw new Error(err?.response?.data?.detail || 'タイトルの更新に失敗しました')
+    }
+  }, [jobId])
 
   const transcriptText = result?.transcript?.text || ''
   const proofreadText = result?.corrected_transcript?.corrected_text || ''
@@ -172,6 +200,22 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
     if (!jobId) return
     downloadJson(`result_${jobId.slice(0, 8)}.json`, { status, result })
   }
+
+  const saveNote = async () => {
+    if (!jobId) return
+    setIsNoteSaving(true)
+    try {
+      const res = await apiClient.updateNote(jobId, noteContent)
+      setOriginalNote(noteContent)
+      setNoteLastSaved(res.updated_at || new Date().toISOString())
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'Noteの保存に失敗しました')
+    } finally {
+      setIsNoteSaving(false)
+    }
+  }
+
+  const noteHasChanges = noteContent !== originalNote
 
   const triggerProofread = async () => {
     if (!jobId) return
@@ -266,7 +310,11 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
       <section className="card">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
-            <h2 className="text-xl font-semibold truncate">{displayTitle}</h2>
+            <InlineEditTitle
+              value={displayTitle}
+              onSave={handleTitleUpdate}
+              className="text-xl font-semibold"
+            />
             <div className="text-sm text-gray-600 truncate">
               {status?.youtube_url ? (
                 <a href={status.youtube_url} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:underline">
@@ -337,6 +385,12 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
             onClick={() => setActive('qa')}
           >
             QA
+          </button>
+          <button
+            className={`px-4 py-2 rounded ${active === 'note' ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+            onClick={() => setActive('note')}
+          >
+            Note
           </button>
 
           <button className="ml-auto btn-primary" onClick={fetchAll} disabled={isLoading}>
@@ -423,6 +477,37 @@ export default function ResultsTab({ jobId, settings, onSelectJob }: Props) {
               ))}
               {!result?.qa_results?.length && <div className="text-sm text-gray-500">（履歴なし）</div>}
             </div>
+          </div>
+        )}
+
+        {!error && active === 'note' && (
+          <div className="space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center gap-2">
+              <button
+                className="btn-primary"
+                onClick={saveNote}
+                disabled={isNoteSaving || !noteHasChanges}
+              >
+                {isNoteSaving ? '保存中...' : '保存'}
+              </button>
+              {noteLastSaved && (
+                <span className="text-xs text-gray-500">
+                  最終保存: {new Date(noteLastSaved).toLocaleString()}
+                </span>
+              )}
+              {noteHasChanges && (
+                <span className="text-xs text-amber-600">
+                  未保存の変更があります
+                </span>
+              )}
+            </div>
+
+            <textarea
+              value={noteContent}
+              onChange={(e) => setNoteContent(e.target.value)}
+              className="w-full h-64 p-4 border border-gray-200 rounded-lg text-sm text-gray-800 resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              placeholder="メモを入力..."
+            />
           </div>
         )}
       </section>

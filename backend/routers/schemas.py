@@ -272,6 +272,22 @@ class BulkDeleteJobsResponse(BaseModel):
 
 
 # ============================================================================
+# Update Title Schemas
+# ============================================================================
+
+class UpdateTitleRequest(BaseModel):
+    """Request schema for updating job title"""
+    title: str = Field(..., min_length=1, max_length=500, description="New title for the job")
+
+
+class UpdateTitleResponse(BaseModel):
+    """Response schema for title update"""
+    job_id: str
+    title: str
+    message: str
+
+
+# ============================================================================
 # Folder Tree Schemas (New)
 # ============================================================================
 

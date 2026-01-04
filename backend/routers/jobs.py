@@ -34,6 +34,8 @@ from routers.schemas import (
     DeleteJobResponse,
     BulkDeleteJobsRequest,
     BulkDeleteJobsResponse,
+    UpdateTitleRequest,
+    UpdateTitleResponse,
 )
 from services.job_manager import JobManager
 from services.playlist_expander import (
@@ -477,6 +479,59 @@ async def get_job_result(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve job result"
+        )
+
+
+@router.patch("/{job_id}/title", response_model=UpdateTitleResponse)
+async def update_job_title(
+    job_id: str,
+    request: UpdateTitleRequest,
+    db: Annotated[Session, Depends(get_db)]
+):
+    """
+    Update job title
+    
+    Args:
+        job_id: Job ID
+        request: Update title request with new title
+        db: Database session
+        
+    Returns:
+        Updated title response
+    """
+    try:
+        job_manager = JobManager(db)
+        
+        # Verify job exists
+        job = job_manager.get_job(job_id)
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job {job_id} not found"
+            )
+        
+        # Update the title
+        success = job_manager.update_job_title(job_id, request.title)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update job title"
+            )
+        
+        return UpdateTitleResponse(
+            job_id=job_id,
+            title=request.title,
+            message="Title updated successfully"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update job title: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update job title"
         )
 
 

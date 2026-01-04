@@ -222,6 +222,15 @@ export default function LibraryTab({ onSelectJob }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Handle title update - update local state
+  const handleTitleUpdate = (itemId: string, newTitle: string) => {
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId ? { ...item, title: newTitle } : item
+      )
+    )
+  }
+
   // Load items when folder selected
   useEffect(() => {
     if (selectedFolderId) {
@@ -254,6 +263,7 @@ export default function LibraryTab({ onSelectJob }: Props) {
           onItemClick={handleItemClick}
           onDeleteItem={handleDeleteItem}
           onSearch={fetchItems}
+          onTitleUpdate={handleTitleUpdate}
         />
       </div>
 

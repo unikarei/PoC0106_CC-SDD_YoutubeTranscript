@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 
 from database import engine, Base
-from routers import jobs, export, health, folders, items, tags
+from routers import jobs, export, health, folders, items, tags, notes
 
 
 # Configure logging
@@ -101,6 +101,7 @@ app.include_router(export.router, prefix="/api/jobs", tags=["export"])
 app.include_router(folders.router, prefix="/api/folders", tags=["folders"])
 app.include_router(items.router, prefix="/api", tags=["items"])
 app.include_router(tags.router, prefix="/api/tags", tags=["tags"])
+app.include_router(notes.router, prefix="/api", tags=["notes"])
 app.include_router(health.router, tags=["health"])
 
 

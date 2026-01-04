@@ -2,6 +2,8 @@
 
 import { useState } from 'react'
 import { Item } from '@/types/folder'
+import { InlineEditTitle } from '../InlineEditTitle'
+import { apiClient } from '@/lib/api'
 
 type Props = {
   items: Item[]
@@ -13,6 +15,7 @@ type Props = {
   onItemClick: (itemId: string) => void
   onDeleteItem: (itemId: string) => void
   onSearch?: (params: SearchParams) => void
+  onTitleUpdate?: (itemId: string, newTitle: string) => void
 }
 
 export type SearchParams = {
@@ -35,6 +38,7 @@ export default function FolderItemList({
   onItemClick,
   onDeleteItem,
   onSearch,
+  onTitleUpdate,
 }: Props) {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [searchTag, setSearchTag] = useState('')
@@ -180,13 +184,26 @@ export default function FolderItemList({
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-3 mb-1">
-                      <button
-                        onClick={() => onItemClick(item.id)}
-                        className="font-medium text-gray-900 hover:text-blue-600 text-left truncate"
-                        title={item.title || ''}
-                      >
-                        {item.title || '（タイトルなし）'}
-                      </button>
+                      <div className="flex-1 min-w-0">
+                        <InlineEditTitle
+                          value={item.title || '（タイトルなし）'}
+                          onClick={() => onItemClick(item.id)}
+                          onSave={async (newTitle) => {
+                            if (!item.job_id) {
+                              throw new Error('ジョブIDが見つかりません')
+                            }
+                            try {
+                              await apiClient.updateJobTitle(item.job_id, newTitle)
+                              if (onTitleUpdate) {
+                                onTitleUpdate(item.id, newTitle)
+                              }
+                            } catch (err: any) {
+                              throw new Error(err?.response?.data?.detail || 'タイトルの更新に失敗しました')
+                            }
+                          }}
+                          className="font-medium text-gray-900"
+                        />
+                      </div>
                       {getStatusBadge(item.status)}
                     </div>
 
